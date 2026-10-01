@@ -71,7 +71,7 @@ main() {
   fi
 
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/stagehand.XXXXXX")" || fail "Couldn't create a temporary folder."
-  trap "rm -rf '$TMP'" EXIT
+  trap 'rm -rf "$TMP"' EXIT
 
   echo "Downloading Stagehand..."
   curl -fsSL "$ZIP_URL" -o "$TMP/project.zip" ||
@@ -109,7 +109,8 @@ main() {
   command -v xattr >/dev/null 2>&1 && xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
 
   SHOWN="$DEST"
-  case "$DEST" in "$HOME"/*) SHOWN="~/${DEST#$HOME/}" ;; esac
+  # shellcheck disable=SC2088  # a "~" for showing to the user, not for the shell to expand
+  case "$DEST" in "$HOME"/*) SHOWN="~/${DEST#"$HOME"/}" ;; esac
 
   VERSION="$(cat "$DEST/VERSION" 2>/dev/null)"
   NAME="Stagehand${VERSION:+ $VERSION}"

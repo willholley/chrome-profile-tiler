@@ -3,3 +3,4 @@ generated/
 Thumbs.db
 *.log
 /VERSION
+build/

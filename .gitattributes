@@ -6,3 +6,4 @@
 
 # not shipped in the release zip
 .github  export-ignore
+tests     export-ignore
