@@ -16,6 +16,9 @@ $Pad        = 7   # compensates for the invisible borders Windows adds around wi
 $ModeFile   = Join-Path $RepoDir "generated\install-mode"
 $StoreUrl   = "https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
 $StoreTimeout = 300
+# Every merge to main is published as a release with these files attached (see .github/workflows)
+$ReleasesUrl = "https://github.com/willholley/stagehand/releases/latest/download"
+if ($env:RELEASES_URL) { $ReleasesUrl = $env:RELEASES_URL }
 
 # ---------------------------------------------------------------- helpers
 
@@ -832,7 +835,80 @@ function Show-Menu {
   }
 }
 
+# ---------------------------------------------------------------- updates
+
+function Get-WebText($url) {
+  $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 5
+  if ($r.Content -is [byte[]]) { return [System.Text.Encoding]::ASCII.GetString($r.Content).Trim() }
+  return ([string]$r.Content).Trim()
+}
+
+# Copies a folder's contents over another, file by file (Copy-Item nests folders that already exist)
+function Copy-Tree($from, $to, $skip) {
+  foreach ($item in Get-ChildItem -LiteralPath $from -Force) {
+    if ($skip -contains $item.Name) { continue }
+    $target = Join-Path $to $item.Name
+    if ($item.PSIsContainer) {
+      New-Item -ItemType Directory -Path $target -Force | Out-Null
+      Copy-Tree $item.FullName $target @()
+    } else {
+      Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+    }
+  }
+}
+
+# Offers to update to the latest release. Returns $true if it updated, so the menu can restart.
+# Only installed copies have a VERSION file, so a git checkout never updates itself.
+# Quiet when offline.
+function Update-Stagehand {
+  if ($env:STAGEHAND_NO_UPDATE) { return $false }
+  $versionFile = Join-Path $RepoDir "VERSION"
+  if (-not (Test-Path $versionFile)) { return $false }
+  $here = ([System.IO.File]::ReadAllText($versionFile)).Trim()
+  $ProgressPreference = "SilentlyContinue"   # the progress bar makes downloads much slower
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $latest = Get-WebText "$ReleasesUrl/VERSION"
+    if ($latest -notmatch '^\d+\.\d+\.\d+$' -or $here -notmatch '^\d+\.\d+\.\d+$') { return $false }
+    if ([version]$latest -le [version]$here) { return $false }
+  } catch {
+    return $false
+  }
+
+  Write-Host "A new version of Stagehand is available ($here -> $latest)."
+  Write-Host "Your settings and backups are kept."
+  if ((Read-Host "Update now? [Y/n]") -match '^(n|no)$') { return $false }
+  $tmp = Join-Path $env:TEMP ("stagehand-" + [guid]::NewGuid())
+  try {
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+    $zip = Join-Path $tmp "stagehand.zip"
+    Invoke-WebRequest "$ReleasesUrl/stagehand.zip" -UseBasicParsing -TimeoutSec 120 -OutFile $zip
+    Expand-Archive -LiteralPath $zip -DestinationPath $tmp
+    $src = Join-Path $tmp "stagehand"
+    if (-not (Test-Path (Join-Path $src "scripts\windows.ps1"))) { throw "the download didn't contain the expected files" }
+    $skip = @("generated")
+    if (Test-Path $ConfigFile) { $skip += "config.txt" }
+    Copy-Tree $src $RepoDir $skip
+    Write-Host "Updated to Stagehand $latest (your config.txt was kept)."
+    Write-Host ""
+    return $true
+  } catch {
+    Write-Host "The update didn't work ($($_.Exception.Message)), so carrying on with $here." -ForegroundColor Yellow
+    Read-Host "Press Enter to continue" | Out-Null
+    return $false
+  } finally {
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 # ---------------------------------------------------------------- main
+
+if ($Action -eq "menu" -and (Update-Stagehand)) {
+  # start again with the new files; PowerShell has already read this copy of the script
+  $env:STAGEHAND_NO_UPDATE = "1"
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath
+  exit $LASTEXITCODE
+}
 
 if (-not (Read-Settings)) {
   Read-Host "Press Enter to close" | Out-Null

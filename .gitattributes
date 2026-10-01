@@ -3,3 +3,6 @@
 *.command text eol=lf
 *.bat     text eol=crlf
 *.ps1     text eol=crlf
+
+# not shipped in the release zip
+.github  export-ignore

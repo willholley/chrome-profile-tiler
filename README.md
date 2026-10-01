@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.s
 bash ~/stagehand/scripts/macos.sh
 ```
 
-(Running the install line again updates the tool and keeps your `config.txt`.)
+The menu checks for a new version each time it starts and offers to update (see [Updating](#updating)).
 
 To change your settings later:
 
@@ -80,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.s
 <details>
 <summary><b>Mac without the one-liner</b></summary>
 
-Download the ZIP from GitHub (green **Code** button > **Download ZIP**) and unzip it. In Terminal type `cd ` (with a space after it), **drag the unzipped folder into the Terminal window**, press **Enter**, then paste these two lines one at a time:
+Download [stagehand.zip](https://github.com/willholley/stagehand/releases/latest/download/stagehand.zip) and unzip it. In Terminal type `cd ` (with a space after it), **drag the unzipped folder into the Terminal window**, press **Enter**, then paste these two lines one at a time:
 
 ```
 xattr -dr com.apple.quarantine .
@@ -95,7 +95,7 @@ Edit `config.txt` with TextEdit first (right-click > Open With > TextEdit).
 
 ### Windows
 
-1. On GitHub, click the green **Code** button, choose **Download ZIP**, and unzip it somewhere you'll remember (your Desktop is fine). To avoid a security warning, right-click the ZIP first, choose **Properties**, tick **Unblock**, then unzip.
+1. Download [stagehand.zip](https://github.com/willholley/stagehand/releases/latest/download/stagehand.zip) and unzip it somewhere you'll remember (your Desktop is fine). To avoid a security warning, right-click the ZIP first, choose **Properties**, tick **Unblock**, then unzip.
 2. Open **`config.txt`** in Notepad and check the settings (see [Settings](#settings)).
 3. Double-click **`Start (Windows).bat`**.
 4. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
@@ -199,6 +199,22 @@ Nothing else needs repeating.
 
 ---
 
+## Updating
+
+Every time the menu starts, it checks whether there's a newer version of Stagehand. If there is, it says so and asks:
+
+```
+A new version of Stagehand is available (1.2.0 -> 1.3.0).
+Your settings and backups are kept.
+Update now? [Y/n]
+```
+
+Press **Enter** to update. It downloads the new version, keeps your `config.txt` and everything in `generated/`, and starts the menu again. Type **n** to carry on with the version you have; it asks again next time. If you're offline, or GitHub doesn't answer within a few seconds, the menu starts as normal without saying anything. It never checks while profiles are launching.
+
+On a Mac you can also update by running the install line again.
+
+---
+
 ## Settings
 
 Everything lives in `config.txt`. Open it in Notepad (Windows) or TextEdit (Mac). Write values exactly as shown, with no quotes.
@@ -242,7 +258,7 @@ These warnings appear because the files came from the internet and aren't signed
 
 Being upfront, because some of this is unusual:
 
-- **The Mac installer downloads this project from GitHub** into `~/stagehand`. That's the only network request the scripts make themselves; Chrome itself downloads the extension.
+- **It talks to GitHub, and nothing else.** The Mac installer downloads the latest release into `~/stagehand`, and each time the menu starts it downloads a tiny file to see whether there's a newer version (and the new version itself, if you say yes). Those are the only network requests the scripts make themselves; Chrome downloads the extension.
 - **On your own computer, it sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs Lightning Autofill and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just the ones this tool makes. Chrome will show "Managed by your organization", and the extension can't be removed by hand while the policy is in place. Removing the policy later removes the extension too (see [Undoing everything](#undoing-everything)). On a work or school computer it never does this.
 - **It copies the extension's saved data** between profile folders inside Chrome's data directory. This isn't an official Chrome feature, so it can fail in some situations (see above). What was there before is backed up to a `generated/` folder inside this project.
 - **It closes Chrome** (after asking) for the steps that need it. Save your work first.
@@ -298,18 +314,24 @@ The master profile lives in a Chrome profile folder called `Autofill Master`, ne
 Files:
 
 ```
+.github/workflows/      publishes a release for every merge to main
 install.sh              macOS one-line installer (curl | bash)
 Start (Windows).bat     double-click launcher for Windows
 Start (Mac).command     double-click launcher for macOS (the installer is more reliable)
 config.txt              the only file most people need to edit
 scripts/windows.ps1     Windows implementation (PowerShell 5.1+)
 scripts/macos.sh        macOS implementation (bash 3.2+, the version macOS ships)
+VERSION                 the installed version; only in release downloads, not in the repository
 generated/              created at run time: backups, the install mode from step 1, and the Mac settings profile (git-ignored)
 ```
 
 ## Contributing
 
 Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShell 5.1 misreads non-ASCII characters in files without a byte-order mark) and compatible with bash 3.2. In `install.sh`, keep all code inside functions with `main "$@"` as the last line, and read prompts from `/dev/tty`, because the script arrives on stdin when piped.
+
+**Releases are automatic.** Every merge to `main` publishes a GitHub release (`.github/workflows/release.yml`) with `stagehand.zip` and `VERSION` attached, which is what the installer and the menu's updater download. The version follows semver, worked out from the commit messages since the last release: a `feat!:` prefix or `BREAKING CHANGE` makes it a major release, `feat:` a minor one, and anything else a patch. PRs are squash-merged, so the PR title is what counts: start it with `feat:` or `fix:`.
+
+To try a branch on a Mac before it's released: `STAGEHAND_BRANCH=my-branch bash install.sh`.
 
 ## Licence
 

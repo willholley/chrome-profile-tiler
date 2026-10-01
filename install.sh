@@ -6,16 +6,21 @@
 #   curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | bash
 #
 # What it does:
-#   1. Downloads the latest copy of this project into ~/stagehand
+#   1. Downloads the latest release of this project into ~/stagehand
 #   2. If you run it again later, updates the files but keeps your config.txt
 #   3. Offers to open config.txt for editing, then offers to start the menu
+#
+# The menu also runs this file itself (with STAGEHAND_UPDATE=1) when it finds a newer
+# release, so keep that path working.
 #
 # Notes for maintainers:
 #   - Everything lives inside functions and the last line calls main, so a
 #     half-downloaded copy of this file can't run partway.
 #   - When piped (curl | bash) the script itself arrives on stdin, so every
 #     prompt reads from /dev/tty instead.
-#   - Environment overrides: STAGEHAND_REPO, STAGEHAND_BRANCH, STAGEHAND_DIR, STAGEHAND_ZIP_URL.
+#   - Environment overrides: STAGEHAND_REPO, STAGEHAND_DIR, STAGEHAND_ZIP_URL, and
+#     STAGEHAND_BRANCH to install a branch instead of the latest release (for testing).
+#   - STAGEHAND_UPDATE=1 skips the questions at the end (used by the menu's updater).
 
 fail() {
   printf '\nError: %s\n' "$1" >&2
@@ -35,9 +40,13 @@ ask() {
 
 main() {
   REPO="${STAGEHAND_REPO:-willholley/stagehand}"
-  BRANCH="${STAGEHAND_BRANCH:-main}"
   DEST="${STAGEHAND_DIR:-$HOME/stagehand}"
-  ZIP_URL="${STAGEHAND_ZIP_URL:-https://github.com/$REPO/archive/refs/heads/$BRANCH.zip}"
+  if [ -n "$STAGEHAND_BRANCH" ]; then
+    ZIP_URL="https://github.com/$REPO/archive/refs/heads/$STAGEHAND_BRANCH.zip"
+  else
+    ZIP_URL="https://github.com/$REPO/releases/latest/download/stagehand.zip"
+  fi
+  ZIP_URL="${STAGEHAND_ZIP_URL:-$ZIP_URL}"
 
   if [ "$(uname)" != "Darwin" ] && [ -z "$STAGEHAND_ALLOW_ANY_OS" ]; then
     fail "This installer is for macOS. On Windows, see the README for the Windows steps."
@@ -66,18 +75,10 @@ main() {
 
   echo "Downloading Stagehand..."
   curl -fsSL "$ZIP_URL" -o "$TMP/project.zip" ||
-    fail "Download failed. Check your internet connection and that the GitHub repository is public: $ZIP_URL"
+    fail "Download failed. Check your internet connection, and that the repository is public and has a release: $ZIP_URL"
   unzip -q "$TMP/project.zip" -d "$TMP/unzipped" || fail "Couldn't unzip the download."
   SRC="$(find "$TMP/unzipped" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [ -n "$SRC" ] && [ -f "$SRC/scripts/macos.sh" ] || fail "The download didn't contain the expected files."
-
-  # The tool used to be called Chrome Profile Tiler and lived in ~/chrome-profile-tiler.
-  # Move an old install to the new folder so its settings and backups come along.
-  OLD="$HOME/chrome-profile-tiler"
-  if [ -z "$STAGEHAND_DIR" ] && [ ! -e "$DEST" ] && [ -f "$OLD/scripts/macos.sh" ]; then
-    mv "$OLD" "$DEST" || fail "Couldn't move your old install from $OLD to $DEST."
-    echo "Moved your existing install from ~/chrome-profile-tiler to ~/stagehand."
-  fi
 
   # Keep the user's settings and backups across updates
   FRESH=1
@@ -102,12 +103,16 @@ main() {
   SHOWN="$DEST"
   case "$DEST" in "$HOME"/*) SHOWN="~/${DEST#$HOME/}" ;; esac
 
+  VERSION="$(cat "$DEST/VERSION" 2>/dev/null)"
+  NAME="Stagehand${VERSION:+ $VERSION}"
+
   echo
   if [ "$FRESH" -eq 1 ]; then
-    echo "Installed to $SHOWN"
+    echo "Installed $NAME to $SHOWN"
   else
-    echo "Updated $SHOWN (your config.txt was kept)."
+    echo "Updated to $NAME (your config.txt was kept)."
   fi
+  [ -n "$STAGEHAND_UPDATE" ] && return 0
 
   if have_tty; then
     echo
@@ -131,7 +136,7 @@ main() {
   echo "  bash $SHOWN/scripts/macos.sh"
   echo
   echo "To edit your settings:  open -e $SHOWN/config.txt"
-  echo "To update to the latest version, run the install line again (your settings are kept)."
+  echo "The menu offers to update itself when there's a new version."
 }
 
 main "$@"
