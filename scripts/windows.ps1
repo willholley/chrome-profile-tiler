@@ -13,6 +13,9 @@ $UserData   = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data"
 if ($env:CHROME_DATA_DIR) { $UserData = $env:CHROME_DATA_DIR }
 $PolicyRoot = "HKLM:\SOFTWARE\Policies\Google\Chrome"
 $Pad        = 7   # compensates for the invisible borders Windows adds around windows
+$ModeFile   = Join-Path $RepoDir "generated\install-mode"
+$StoreUrl   = "https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
+$StoreTimeout = 300
 
 # ---------------------------------------------------------------- helpers
 
@@ -172,6 +175,65 @@ function Test-PolicyInstalled {
   return $false
 }
 
+# One line for each sign that an organisation (work or school) manages this PC.
+# Chrome settings that Stagehand installed itself don't count.
+function Get-ManagedReasons {
+  $why = @()
+  try {
+    if ((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).PartOfDomain) {
+      $why += "it's joined to a company network (domain)"
+    }
+  } catch {}
+  try {
+    $ds = (& dsregcmd.exe /status 2>$null) -join "`n"
+    if ($ds -match 'AzureAdJoined\s*:\s*YES') { $why += "it's joined to an organisation's Microsoft Entra ID" }
+    if ($ds -match 'EnterpriseJoined\s*:\s*YES') { $why += "it's joined to an organisation's network" }
+    if ($ds -match 'MdmUrl\s*:\s*https?://') { $why += "it's enrolled in device management (MDM)" }
+  } catch {}
+  foreach ($k in "HKLM:\SOFTWARE\WOW6432Node\Google\Enrollment", "HKLM:\SOFTWARE\Google\Enrollment") {
+    if ((Test-Path $k) -and ((Get-Item $k).GetValue("dmtoken"))) {
+      $why += "Chrome is managed by an organisation (Chrome Enterprise)"
+      break
+    }
+  }
+  foreach ($root in "HKLM:\SOFTWARE\Policies\Google\Chrome", "HKCU:\SOFTWARE\Policies\Google\Chrome") {
+    if (-not (Test-Path $root)) { continue }
+    $extra = @((Get-Item $root).GetValueNames() | Where-Object { $_ -ne "RestoreOnStartup" })
+    foreach ($sub in Get-ChildItem $root) {
+      $name = $sub.PSChildName
+      if ($name -eq "RestoreOnStartupURLs") { continue }
+      if ($name -eq "ExtensionInstallForcelist") {
+        $others = @(Get-ListEntries "$root\$name" | Where-Object { -not $_.Value.StartsWith("$ExtId;") })
+        if ($others.Count -eq 0) { continue }
+      }
+      $extra += $name
+    }
+    if ($extra.Count -gt 0) { $why += "Chrome already has settings from an organisation ($($extra -join ', '))" }
+  }
+  return $why
+}
+
+# How the extension gets into each profile, chosen at step 1:
+#   policy = a Chrome policy installs it everywhere (own computer; no clicks)
+#   store  = the user clicks "Add to Chrome" in each profile (work or school computer)
+# Returns "policy", "store", or "" if step 1 hasn't been done yet.
+function Get-InstallMode {
+  if (Test-Path $ModeFile) { return ([System.IO.File]::ReadAllText($ModeFile)).Trim() }
+  if (Test-PolicyInstalled) { return "policy" }   # set up by an earlier version
+  return ""
+}
+
+function Set-InstallMode($mode) {
+  New-Item -ItemType Directory -Path (Split-Path -Parent $ModeFile) -Force | Out-Null
+  [System.IO.File]::WriteAllText($ModeFile, $mode)
+}
+
+function Test-NeedStep1 {
+  if ((Get-InstallMode) -ne "") { return $false }
+  Write-Host "Please choose step 1 first."
+  return $true
+}
+
 function Install-Policy {
   if (-not (Test-Admin)) {
     Write-Host "Windows will now ask for permission (a UAC prompt) to set Chrome's policy..."
@@ -212,14 +274,22 @@ function Remove-Policy {
 
 # ---------------------------------------------------------------- profiles
 
-# Opens one profile just long enough for the policy to install the extension in it.
+# Opens one profile just long enough for the extension to be installed in it: by the
+# policy, or by the user clicking "Add to Chrome" on the Web Store page.
 # Returns $true if the extension is there afterwards, $false if it never appeared.
 function Install-ExtensionIn($p) {
   $extDir = Join-Path $UserData "$p\Extensions\$ExtId"
   if (-not (Test-Path $extDir)) {
-    Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$p`"", "about:blank")
+    $url = "about:blank"
+    $timeout = $InstallTimeout
+    if ((Get-InstallMode) -eq "store") {
+      $url = $StoreUrl
+      $timeout = $StoreTimeout
+      Write-Host "    In the Chrome window that opens, click 'Add to Chrome', then 'Add extension'."
+    }
+    Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$p`"", $url)
     $waited = 0
-    while (-not (Test-Path $extDir) -and $waited -lt $InstallTimeout) {
+    while (-not (Test-Path $extDir) -and $waited -lt $timeout) {
       Start-Sleep -Seconds 2
       $waited += 2
     }
@@ -230,20 +300,27 @@ function Install-ExtensionIn($p) {
 }
 
 function Open-MasterProfile {
+  if (Test-NeedStep1) { return }
+  $chromeArgs = @("--profile-directory=`"$MasterProfile`"", "--new-window")
   Write-Host "Opening the master profile."
   Write-Host "This is a separate Chrome profile just for setting up $ExtName by hand."
-  Write-Host "The first time, it can take up to a minute for the extension to appear."
   Write-Host ""
   Write-Host "When Chrome opens:"
   Write-Host "  - If it asks you to sign in or turn on sync, choose 'Don't sign in'."
+  if ((Get-InstallMode) -eq "store") {
+    Write-Host "  - Click 'Add to Chrome', then 'Add extension', to install $ExtName."
+    $chromeArgs += $StoreUrl
+  } else {
+    Write-Host "  - Wait for $ExtName to install itself (up to a minute the first time)."
+  }
   Write-Host "  - Follow your Autofill instructions to set up $ExtName."
   Write-Host "  - When you've finished and clicked Save, close Chrome completely."
   Write-Host "Then come back here and choose step 3."
-  Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$MasterProfile`"", "--new-window")
+  Start-Process $ChromeExe -ArgumentList $chromeArgs
 }
 
-
 function Copy-Master {
+  if (Test-NeedStep1) { return }
   $src = Join-Path $UserData $MasterProfile
   $srcLocal = Join-Path $src "Local Extension Settings\$ExtId"
   if (-not (Test-Path $srcLocal)) {
@@ -278,11 +355,16 @@ function Copy-Master {
     if (Install-ExtensionIn $p) {
       Write-Host "    done"
     } else {
-      Write-Host "    WARNING: the extension didn't appear within ${InstallTimeout}s." -ForegroundColor Yellow
+      Write-Host "    WARNING: the extension didn't appear." -ForegroundColor Yellow
       if ($tried -eq 1) {
         Write-Host ""
-        Write-Host "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
-        Write-Host "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        if ((Get-InstallMode) -eq "store") {
+          Write-Host "Did you click 'Add to Chrome' and then 'Add extension'? If the Web Store said the"
+          Write-Host "extension is blocked, your organisation doesn't allow it on this computer."
+        } else {
+          Write-Host "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
+          Write-Host "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        }
         return
       }
     }
@@ -327,6 +409,11 @@ function Copy-Master {
 function Show-Status {
   Write-Host "Chrome data folder: $UserData"
   Write-Host "Extension: $ExtName ($ExtId)"
+  switch (Get-InstallMode) {
+    "store"  { Write-Host "Install mode: Add to Chrome in each profile (no policy)" }
+    "policy" { Write-Host "Install mode: Chrome policy installs it everywhere" }
+    default  { Write-Host "Install mode: not chosen yet (step 1)" }
+  }
   if (Test-PolicyInstalled) { Write-Host "Policy: installed" } else { Write-Host "Policy: NOT installed" }
   Write-Host ""
   Write-Host ("{0,-18} {1,-11} {2}" -f "PROFILE", "EXTENSION", "SAVED SETTINGS")
@@ -354,11 +441,40 @@ function Show-Status {
   Write-Host "fresh one. After step 3, every copy should be close to the master's size."
 }
 
+function Use-StoreMode {
+  Set-InstallMode "store"
+  Write-Host "OK: nothing on this computer will be changed. Instead, when each profile is created,"
+  Write-Host "Chrome opens on $ExtName's Web Store page and you click 'Add to Chrome',"
+  Write-Host "then 'Add extension'. That's two clicks per profile, once."
+  Write-Host ""
+  Write-Host "On a work or school computer, check first that your organisation allows this:"
+  Write-Host "its security software may notice Stagehand creating Chrome profiles and moving windows."
+}
+
 function Start-OneTimeSetup {
-  Install-Policy
-  if (-not (Test-PolicyInstalled)) {
-    Write-Host "The policy isn't installed, so I'm stopping here." -ForegroundColor Yellow
-    return
+  $why = @(Get-ManagedReasons)
+  if ($why.Count -gt 0) {
+    Write-Host "This looks like a work or school computer:" -ForegroundColor Yellow
+    foreach ($w in $why) { Write-Host "  - $w" }
+    Write-Host ""
+    Write-Host "So I won't change Chrome's settings for the whole computer."
+    Use-StoreMode
+  } else {
+    Write-Host "On your own computer, Stagehand can let Chrome install $ExtName in every"
+    Write-Host "profile by itself. It does that with a Chrome setting for the whole computer, so"
+    Write-Host "it's not for a computer from work or school."
+    Write-Host ""
+    if (Read-YesNo "Is this your own personal computer?") {
+      Install-Policy
+      if (-not (Test-PolicyInstalled)) {
+        Write-Host "The policy isn't installed, so I'm stopping here." -ForegroundColor Yellow
+        return
+      }
+      Set-InstallMode "policy"
+    } else {
+      Write-Host ""
+      Use-StoreMode
+    }
   }
   Write-Host ""
   Write-Host "One-time setup finished. Next, choose step 2 to open the master profile."
@@ -366,16 +482,25 @@ function Start-OneTimeSetup {
 
 # ---------------------------------------------------------------- uninstall
 
-function Confirm-PolicyRemoval {
-  Write-Host "Heads up: removing the policy also removes $ExtName."
-  Write-Host "Chrome treats the extension as managed by the policy, so it will uninstall it from"
-  Write-Host "EVERY profile the next time Chrome starts, along with the extension's saved settings."
-  Write-Host "The startup page set by the policy goes away too."
+function Remove-Stagehand {
+  Write-Host "This removes what Stagehand set up: it deletes the profiles it made and, if you"
+  Write-Host "want, takes $ExtName back off this computer."
   Write-Host ""
-  Write-Host "Only continue if you're finished with the extension, or you plan to install it"
-  Write-Host "yourself from the Chrome Web Store afterwards (it will start empty)."
-  Write-Host ""
-  return (Read-YesNo "Remove the policy anyway?")
+  if (-not (Remove-ChromeProfiles)) { return }
+  if (Test-PolicyInstalled) {
+    Write-Host ""
+    Write-Host "Chrome is still set to install $ExtName in every profile on this computer"
+    Write-Host "(that's why it says 'Managed by your organization')."
+    Write-Host "Taking that off also removes $ExtName, and its saved settings, from every"
+    Write-Host "profile that's left, including the master profile if you kept it."
+    if (-not (Read-YesNo "Take it off now?")) {
+      Write-Host "Left in place. Choose this option again whenever you're ready."
+      return
+    }
+    Remove-Policy
+    if (Test-PolicyInstalled) { return }
+  }
+  if (Test-Path $ModeFile) { Remove-Item $ModeFile -Force }
 }
 
 # Removes profile folders from Chrome's profile list (the "Local State" file).
@@ -414,11 +539,12 @@ function Update-LocalState($names) {
   }
 }
 
+# Returns $false if the user cancelled.
 function Remove-ChromeProfiles {
   $existing = @($Profiles | Where-Object { $_ -ne "Default" -and (Test-Path (Join-Path $UserData $_)) })
   if ($existing.Count -eq 0 -and -not (Test-Path (Join-Path $UserData $MasterProfile))) {
     Write-Host "None of the profiles exist, so there's nothing to delete."
-    return
+    return $true
   }
 
   $list = @($existing)
@@ -427,7 +553,7 @@ function Remove-ChromeProfiles {
     Write-Host "Keeping it means you can copy it into new profiles again later."
     if (Read-YesNo "Delete the master profile too?") { $list += $MasterProfile }
   }
-  if ($list.Count -eq 0) { Write-Host "Nothing left to delete."; return }
+  if ($list.Count -eq 0) { Write-Host "Nothing left to delete."; return $true }
 
   Write-Host ""
   Write-Host "These profiles will be DELETED:"
@@ -439,15 +565,15 @@ function Remove-ChromeProfiles {
   Write-Host "be deleted permanently instead)."
   Write-Host ""
   $typed = Read-Host "Type DELETE (in capitals) to continue"
-  if ($typed -cne "DELETE") { Write-Host "Cancelled."; return }
+  if ($typed -cne "DELETE") { Write-Host "Cancelled."; return $false }
 
-  if (-not (Confirm-ChromeClosed)) { return }
+  if (-not (Confirm-ChromeClosed)) { return $false }
 
   if (-not (Update-LocalState $list)) {
     Write-Host "I couldn't tidy Chrome's list of profiles (nothing was changed there)."
     if (-not (Read-YesNo "Delete the folders anyway? Chrome may then show empty leftover entries.")) {
       Write-Host "Cancelled."
-      return
+      return $false
     }
   }
 
@@ -470,7 +596,7 @@ function Remove-ChromeProfiles {
   Write-Host "Deleted $moved profile(s). Empty the Recycle Bin to free the space."
   Write-Host "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   Write-Host "that card and choose Delete."
-  Write-Host "If you're removing everything, choose option 7 next to remove the policy."
+  return $true
 }
 
 # ---------------------------------------------------------------- tiling
@@ -608,7 +734,7 @@ function Invoke-Action($name) {
     "launch"          { Start-TiledLaunch $false }
     "test-launch"     { Start-TiledLaunch $true }
     "status"          { Show-Status }
-    "delete-profiles" { Remove-ChromeProfiles }
+    "remove"          { Remove-Stagehand }
     default           { Write-Host "Unknown action: $name" }
   }
 }
@@ -642,13 +768,13 @@ function Get-SettingsKB($dir) {
 # Which setup steps look finished: an array of three booleans
 function Get-Progress {
   $master = Join-Path $UserData $MasterProfile
-  $policy = (Test-PolicyInstalled)
+  $chosen = ((Get-InstallMode) -ne "")
   $setUp  = ((Get-SettingsKB (Join-Path $master "Local Extension Settings\$ExtId")) -ge 8)
   $copied = $true
   foreach ($p in $Profiles) {
     if ((Get-SettingsKB (Join-Path $UserData "$p\Local Extension Settings\$ExtId")) -lt 8) { $copied = $false; break }
   }
-  return @($policy, $setUp, $copied)
+  return @($chosen, $setUp, $copied)
 }
 
 function Show-Menu {
@@ -657,7 +783,7 @@ function Show-Menu {
     Show-Banner
     $done   = Get-Progress
     $labels = @(
-      "Let Chrome install $ExtName for you",
+      "Choose how to install $ExtName",
       "Set up $ExtName in the master profile",
       "Copy the master into Profile 1 - Profile $ProfileCount"
     )
@@ -681,8 +807,7 @@ function Show-Menu {
     Write-Host ""
     Write-Host "  More"
     Write-Host "      6) Check status"
-    Write-Host "      7) Remove the policy (also removes the extension)"
-    Write-Host "      8) Delete the profiles"
+    Write-Host "      7) Finished with the sale? Remove Stagehand"
     Write-Host "      Q) Quit"
     Write-Host ""
     if (-not $nextShown) {
@@ -698,12 +823,9 @@ function Show-Menu {
       "4" { Invoke-Action "launch" }
       "5" { Invoke-Action "test-launch" }
       "6" { Invoke-Action "status" }
-      "7" {
-        if (Confirm-PolicyRemoval) { Invoke-Action "policy-remove" } else { Write-Host "Cancelled." }
-      }
-      "8" { Invoke-Action "delete-profiles" }
+      "7" { Invoke-Action "remove" }
       "Q" { return }
-      default { Write-Host "Please choose 1-8 or Q." }
+      default { Write-Host "Please choose 1-7 or Q." }
     }
     Write-Host ""
     Read-Host "Press Enter to return to the menu" | Out-Null
