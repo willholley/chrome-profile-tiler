@@ -211,8 +211,8 @@ validate_config() {
 set_config_value() {
   local key="$1" val="$2" line pattern found=0 tmp="$CONFIG_FILE.tmp"
   [ -f "$CONFIG_FILE" ] || : > "$CONFIG_FILE" || return 1
-  pattern="^[[:space:]]*$key[[:space:]]*="
-  grep -qE "$pattern" "$CONFIG_FILE" || pattern="^#[[:space:]]*$key[[:space:]]*="
+  pattern="^[[:space:]]*${key}[[:space:]]*="
+  grep -qE "$pattern" "$CONFIG_FILE" || pattern="^#[[:space:]]*${key}[[:space:]]*="
   : > "$tmp" || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
@@ -510,7 +510,7 @@ copy_master() {
           cp -R "$CHROME_DIR/$p/$a/$EXTENSION_ID" "$backup/$p/$a/"
         fi
         mkdir -p "$CHROME_DIR/$p/$a"
-        rm -rf "$CHROME_DIR/$p/$a/$EXTENSION_ID"
+        rm -rf "${CHROME_DIR:?}/$p/$a/$EXTENSION_ID"
         cp -R "$src/$a/$EXTENSION_ID" "$CHROME_DIR/$p/$a/$EXTENSION_ID"
       fi
     done
@@ -641,7 +641,8 @@ tidy_local_state() {
   [ -f "$ls" ] || return 0
   command -v perl >/dev/null 2>&1 || return 1
   mkdir -p "$REPO_DIR/generated"
-  local bk="$REPO_DIR/generated/Local State.backup-$(date +%Y%m%d-%H%M%S)"
+  local bk
+  bk="$REPO_DIR/generated/Local State.backup-$(date +%Y%m%d-%H%M%S)"
   cp "$ls" "$bk" || return 1
   if perl - "$ls" "$@" 2>/dev/null <<'PERL'
 use strict; use warnings; use JSON::PP;
@@ -760,9 +761,9 @@ detect_screens() {
 
   if [ ${#SCREENS[@]} -eq 0 ]; then
     # fallback: primary screen only, leaving room for the menu bar
-    local b bx by bw bh
+    local b bw bh
     b="$(osascript -e 'tell application "Finder" to get bounds of window of desktop' 2>/dev/null | tr -d ' ')"
-    IFS=, read -r bx by bw bh <<< "$b"
+    IFS=, read -r _ _ bw bh <<< "$b"
     if [ -n "$bw" ] && [ -n "$bh" ]; then
       SCREENS+=("0 25 $bw $((bh - 25))")
     fi
@@ -803,12 +804,12 @@ chrome_ids() {
 
 # $1 = window IDs that existed before; $2..$5 = left top right bottom
 place_new_window() {
-  local before="$1" left=$2 top=$3 right=$4 bottom=$5 id pass n
+  local before="$1" left=$2 top=$3 right=$4 bottom=$5 id n
   for n in $(seq 1 30); do
     sleep 0.5
     for id in $(chrome_ids); do
       if ! grep -qx "$id" <<< "$before"; then
-        for pass in 1 2; do  # twice: Chrome can re-apply its saved size just after opening
+        for _ in 1 2; do  # twice: Chrome can re-apply its saved size just after opening
           osascript -e "tell application \"Google Chrome\" to set bounds of (first window whose id is $id) to {$left, $top, $right, $bottom}" >/dev/null 2>&1
           sleep 1
         done
@@ -903,7 +904,7 @@ EOF
 
 # Sets DONE_1, DONE_2, DONE_3 to 1 for each setup step that looks finished
 check_progress() {
-  local m="$CHROME_DIR/$MASTER_PROFILE" d p
+  local d p
   DONE_1=0; DONE_2=0; DONE_3=1
   [ -n "$(install_mode)" ] && DONE_1=1
   master_set_up && DONE_2=1

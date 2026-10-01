@@ -1,0 +1,89 @@
+# Checks every pull request, and runs again from release.yml before each release is published.
+#
+# None of this drives Chrome or the screen: it checks the scripts' own logic, and installs the
+# release zip into a temporary folder. To run the same tests on a Mac:
+#
+#   /bin/bash tests/macos_test.sh
+#   .github/build.sh 0.0.1 && bash tests/install_test.sh    (builds from the last commit)
+
+name: Test
+
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned, so the results don't change when the runner's own copy is updated
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" |
+            tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+
+      - name: Shellcheck
+        run: shellcheck --version && shellcheck -x install.sh scripts/macos.sh "Start (Mac).command" .github/build.sh tests/*.sh
+
+      - name: windows.ps1 is ASCII only
+        # Windows PowerShell 5.1 misreads non-ASCII characters in a file without a byte-order mark
+        run: |
+          if LC_ALL=C grep -n '[^[:print:][:space:]]' scripts/windows.ps1; then
+            echo "::error file=scripts/windows.ps1::Non-ASCII characters on the lines above"
+            exit 1
+          fi
+
+      # The release is built and published on Linux, so check the installer works with a zip
+      # built there too
+      - name: Build the release zip
+        run: .github/build.sh 0.0.1
+
+      - name: Installer tests
+        run: bash tests/install_test.sh
+
+  macos:
+    # The macOS runner's /bin/bash is 3.2, the version users have
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: /bin/bash tests/macos_test.sh
+
+      - name: Build the release zip
+        run: .github/build.sh 0.0.1
+
+      - name: Installer tests
+        run: /bin/bash tests/install_test.sh
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]   # Windows PowerShell 5.1, which users have, and PowerShell 7
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: windows.ps1 parses
+        run: |
+          $tokens = $null; $errors = $null
+          $path = Join-Path $PWD "scripts\windows.ps1"
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          foreach ($e in $errors) {
+            Write-Host "::error file=scripts/windows.ps1,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+          }
+          if ($errors.Count -gt 0) { exit 1 }
+          Write-Host "Parsed with PowerShell $($PSVersionTable.PSVersion)"

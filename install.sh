@@ -71,14 +71,16 @@ main() {
   fi
 
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/stagehand.XXXXXX")" || fail "Couldn't create a temporary folder."
-  trap "rm -rf '$TMP'" EXIT
+  trap 'rm -rf "$TMP"' EXIT
 
   echo "Downloading Stagehand..."
   curl -fsSL "$ZIP_URL" -o "$TMP/project.zip" ||
     fail "Download failed. Check your internet connection, and that the repository is public and has a release: $ZIP_URL"
   unzip -q "$TMP/project.zip" -d "$TMP/unzipped" || fail "Couldn't unzip the download."
   SRC="$(find "$TMP/unzipped" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  [ -n "$SRC" ] && [ -f "$SRC/scripts/macos.sh" ] || fail "The download didn't contain the expected files."
+  if [ -z "$SRC" ] || [ ! -f "$SRC/scripts/macos.sh" ]; then
+    fail "The download didn't contain the expected files."
+  fi
 
   # Keep the user's settings and backups across updates: copy them into the new files first,
   # so nothing is lost if a later step fails
@@ -109,7 +111,8 @@ main() {
   command -v xattr >/dev/null 2>&1 && xattr -dr com.apple.quarantine "$DEST" 2>/dev/null
 
   SHOWN="$DEST"
-  case "$DEST" in "$HOME"/*) SHOWN="~/${DEST#$HOME/}" ;; esac
+  # shellcheck disable=SC2088  # a "~" for showing to the user, not for the shell to expand
+  case "$DEST" in "$HOME"/*) SHOWN="~/${DEST#"$HOME"/}" ;; esac
 
   VERSION="$(cat "$DEST/VERSION" 2>/dev/null)"
   NAME="Stagehand${VERSION:+ $VERSION}"

@@ -15,6 +15,9 @@
 # The release is created as a draft, the files are uploaded, and only then is it published, so
 # "latest" never points at a release with missing files. Re-running the workflow repairs a
 # release whose uploads failed.
+#
+# Nothing is published unless the tests in test.yml pass on the merged commit, and the
+# installer works with the zip that's about to be published.
 
 name: Release
 
@@ -33,7 +36,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,14 +77,10 @@ jobs:
       - name: Build stagehand.zip
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          mkdir -p build
-          git archive --format=tar --prefix=stagehand/ HEAD | tar -x -C build
-          echo "$VERSION" > build/stagehand/VERSION
-          cp build/stagehand/VERSION build/VERSION
-          cp build/stagehand/install.sh build/install.sh
-          (cd build && zip -qr stagehand.zip stagehand)
-          unzip -l build/stagehand.zip
+        run: .github/build.sh "$VERSION"
+
+      - name: Test the installer with it
+        run: bash tests/install_test.sh
 
       - name: Publish the release
         env:
