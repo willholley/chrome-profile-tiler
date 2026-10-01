@@ -16,6 +16,7 @@ MANAGED_PREFS_DIR="${MANAGED_PREFS_DIR:-/Library/Managed Preferences}"
 MODE_FILE="$REPO_DIR/generated/install-mode"
 STORE_URL="https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
 STORE_TIMEOUT=300
+COPY_STAMP="$REPO_DIR/generated/last-copy"   # touched after each copy, to spot later changes to the master
 
 # Lightning Autofill is the only extension this tool manages
 EXTENSION_ID="nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
@@ -198,6 +199,70 @@ validate_config() {
   return 0
 }
 
+# Sets KEY=VALUE in config.txt, keeping its comments. Replaces the KEY= line if there is one,
+# otherwise switches on a commented-out #KEY= line, otherwise adds the setting at the end.
+set_config_value() {
+  local key="$1" val="$2" line pattern found=0 tmp="$CONFIG_FILE.tmp"
+  [ -f "$CONFIG_FILE" ] || : > "$CONFIG_FILE" || return 1
+  pattern="^[[:space:]]*$key[[:space:]]*="
+  grep -qE "$pattern" "$CONFIG_FILE" || pattern="^#[[:space:]]*$key[[:space:]]*="
+  : > "$tmp" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ $pattern ]] && { [ "$found" -eq 0 ] || [ "${pattern:1:1}" != "#" ]; }; then
+      printf '%s=%s\n' "$key" "$val" >> "$tmp"
+      found=1
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$CONFIG_FILE"
+  [ "$found" -eq 1 ] || printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  mv "$tmp" "$CONFIG_FILE"
+}
+
+# ask_value "question" current  ->  prints what was typed, or the current value for Enter
+ask_value() {
+  local a
+  read -r -p "$1 [$2]: " a
+  a="$(trim "$a")"
+  printf '%s' "${a:-$2}"
+}
+
+# Asks for each setting, showing the current value, and saves them to config.txt
+edit_settings() {
+  local url count dmin dmax old_url="$STARTUP_URL"
+  say "Press Enter to keep the value in [brackets], or type a new one."
+  say ""
+  while true; do
+    url="$(ask_value "Page to open in every profile" "$STARTUP_URL")"
+    [[ "$url" =~ ^https?://[^[:space:]]+$ ]] && break
+    say "  Please enter a web address starting with https://"
+  done
+  while true; do
+    count="$(ask_value "How many profiles" "$PROFILE_COUNT")"
+    [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -ge 1 ] && break
+    say "  Please enter a whole number, 1 or more."
+  done
+  while true; do
+    dmin="$(ask_value "Shortest pause between opening profiles, in seconds" "$DELAY_MIN")"
+    dmax="$(ask_value "Longest pause between opening profiles, in seconds" "$DELAY_MAX")"
+    [[ "$dmin" =~ ^[0-9]+$ && "$dmax" =~ ^[0-9]+$ ]] && [ "$dmin" -le "$dmax" ] && break
+    say "  Please enter whole numbers, with the shortest no longer than the longest."
+  done
+
+  if ! { set_config_value STARTUP_URL "$url" && set_config_value PROFILE_COUNT "$count" &&
+         set_config_value DELAY_MIN "$dmin" && set_config_value DELAY_MAX "$dmax"; }; then
+    say "Couldn't save the settings to $CONFIG_FILE."
+    return 1
+  fi
+  load_config && validate_config || return 1
+  say ""
+  say "Saved."
+  if [ "$url" != "$old_url" ] && [ "$(install_mode)" = "policy" ] && [ "$SET_STARTUP_PAGE" = "yes" ]; then
+    say "Chrome's own startup page was set at step 1. Choose step 1 again to change it too."
+  fi
+}
+
 # ---------------------------------------------------------------- policy
 
 install_policy() {
@@ -298,10 +363,34 @@ install_extension_in() {
   [ -d "$ext_dir" ]
 }
 
+# 0 if the master profile has Lightning Autofill set up (anything bigger than a fresh install)
+master_set_up() {
+  local d="$CHROME_DIR/$MASTER_PROFILE/Local Extension Settings/$EXTENSION_ID"
+  [ -d "$d" ] && [ "$(dir_kb "$d")" -ge 8 ]
+}
+
+# 0 if the master's Lightning Autofill settings changed after the last copy (step 3)
+master_changed_since_copy() {
+  [ -f "$COPY_STAMP" ] || return 1
+  [ -n "$(find "$CHROME_DIR/$MASTER_PROFILE/Local Extension Settings/$EXTENSION_ID" -type f -newer "$COPY_STAMP" 2>/dev/null | head -n 1)" ]
+}
+
 open_master() {
   need_step_1 && return 1
   local args
   args=(--profile-directory="$MASTER_PROFILE" --new-window)
+  if master_set_up; then
+    say "Opening the master profile, so you can change the $EXTENSION_NAME set-up."
+    say ""
+    say "When Chrome opens:"
+    say "  - Open $EXTENSION_NAME's Options (right-click the lightning icon > Options)."
+    say "  - Make your changes. For new rules: Sync tab > Remote Import > Import,"
+    say "    then click Save on the Form Fields tab."
+    say "  - Close Chrome completely (Cmd+Q)."
+    say "Then come back here and choose step 3 to copy the changes into every profile."
+    open -na "Google Chrome" --args "${args[@]}"
+    return 0
+  fi
   say "Opening the master profile."
   say "This is a separate Chrome profile just for setting up $EXTENSION_NAME by hand."
   say ""
@@ -392,6 +481,7 @@ copy_master() {
   done
 
   say ""
+  mkdir -p "$(dirname "$COPY_STAMP")" && touch "$COPY_STAMP"
   say "Copied the master profile to $copied of $total profiles."
   [ -d "$backup" ] && say "What was there before is backed up in: $backup"
   say ""
@@ -449,6 +539,11 @@ use_store_mode() {
 
 one_time_setup() {
   local why
+  if [ -z "$(install_mode)" ]; then
+    say "First, a few settings (you can change them later with option 8)."
+    edit_settings || return 1
+    say ""
+  fi
   why="$(managed_reasons)"
   if [ -n "$why" ]; then
     say "This looks like a work or school computer:"
@@ -766,12 +861,12 @@ check_progress() {
   local m="$CHROME_DIR/$MASTER_PROFILE" d p
   DONE_1=0; DONE_2=0; DONE_3=1
   [ -n "$(install_mode)" ] && DONE_1=1
-  d="$m/Local Extension Settings/$EXTENSION_ID"
-  [ -d "$d" ] && [ "$(dir_kb "$d")" -ge 8 ] && DONE_2=1
+  master_set_up && DONE_2=1
   for p in "${PROFILES[@]}"; do
     d="$CHROME_DIR/$p/Local Extension Settings/$EXTENSION_ID"
     if [ ! -d "$d" ] || [ "$(dir_kb "$d")" -lt 8 ]; then DONE_3=0; break; fi
   done
+  master_changed_since_copy && DONE_3=0
 }
 
 # $1 = step number, $2 = 1 if done, $3 = label. The first unfinished step is marked as next.
@@ -794,8 +889,16 @@ show_menu() {
   say ""
   say "  Get set up (once)"
   setup_line 1 "$DONE_1" "Choose how to install $EXTENSION_NAME"
-  setup_line 2 "$DONE_2" "Set up $EXTENSION_NAME in the master profile"
-  setup_line 3 "$DONE_3" "Copy the master into Profile 1 - Profile $PROFILE_COUNT"
+  if [ "$DONE_2" -eq 1 ]; then
+    setup_line 2 1 "Open the master profile to change the Autofill set-up"
+  else
+    setup_line 2 0 "Set up $EXTENSION_NAME in the master profile"
+  fi
+  if master_changed_since_copy; then
+    setup_line 3 0 "Copy the master into Profile 1 - Profile $PROFILE_COUNT (the master has changed)"
+  else
+    setup_line 3 "$DONE_3" "Copy the master into Profile 1 - Profile $PROFILE_COUNT"
+  fi
   say ""
   say "  On the day"
   say "      4) Launch all the profiles"
@@ -804,6 +907,7 @@ show_menu() {
   say "  More"
   say "      6) Check status"
   say "      7) Finished with the sale? Remove Stagehand"
+  say "      8) Change settings (page, number of profiles, pauses)"
   say "      Q) Quit"
   say ""
   if [ -z "$NEXT_SHOWN" ]; then
@@ -851,8 +955,12 @@ check_for_update() {
 
 main() {
   check_for_update
-  load_config || { pause; exit 1; }
-  validate_config || { pause; exit 1; }
+  if ! load_config || ! validate_config; then
+    say ""
+    say "Let's fix the settings."
+    say ""
+    edit_settings || { pause; exit 1; }
+  fi
   if ! chrome_installed; then
     say "Google Chrome wasn't found in /Applications. Please install it first."
     pause
@@ -872,8 +980,9 @@ main() {
       5) launch_tiled fast ;;
       6) show_status ;;
       7) remove_stagehand ;;
+      8) edit_settings ;;
       q|Q) exit 0 ;;
-      *) say "Please choose 1-7 or Q." ;;
+      *) say "Please choose 1-8 or Q." ;;
     esac
     say ""
     pause
