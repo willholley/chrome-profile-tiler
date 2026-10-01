@@ -3,7 +3,7 @@
 #
 # Run it by pasting this into Terminal:
 #
-#   curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | bash
+#   curl -fsSL https://github.com/willholley/stagehand/releases/latest/download/install.sh | bash
 #
 # What it does:
 #   1. Downloads the latest release of this project into ~/stagehand
