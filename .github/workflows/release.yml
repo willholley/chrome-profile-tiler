@@ -5,8 +5,9 @@
 # With squash merges the PR title becomes the commit message, so start PR titles with
 # feat: or fix: as appropriate. The first release is 1.0.0.
 #
-# Each release has two files attached, which the tool downloads from the stable
+# Each release has three files attached, which are downloaded from the stable
 # .../releases/latest/download/<file> URLs:
+#   install.sh     the Mac installer (the README's one-line install pipes it into bash)
 #   stagehand.zip  the tool, in a "stagehand" folder, with a VERSION file inside
 #   VERSION        just the version number, so the tool can check for updates cheaply
 
@@ -65,6 +66,7 @@ jobs:
           git archive --format=tar --prefix=stagehand/ HEAD | tar -x -C build
           echo "$VERSION" > build/stagehand/VERSION
           cp build/stagehand/VERSION build/VERSION
+          cp build/stagehand/install.sh build/install.sh
           (cd build && zip -qr stagehand.zip stagehand)
           unzip -l build/stagehand.zip
 
@@ -74,7 +76,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "v$VERSION" build/stagehand.zip build/VERSION \
+          gh release create "v$VERSION" build/install.sh build/stagehand.zip build/VERSION \
             --target "$GITHUB_SHA" \
             --title "Stagehand $VERSION" \
             --generate-notes

@@ -40,7 +40,7 @@ You never type anything about "extensions" or "profile names": the tool already 
 **2. Paste this line and press Enter:**
 
 ```
-curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | bash
+curl -fsSL https://github.com/willholley/stagehand/releases/latest/download/install.sh | bash
 ```
 
 **3. Answer the prompts.** It downloads the tool into a `stagehand` folder in your home folder, then offers to start the menu. The first time, step 1 asks for your settings (see [Settings](#settings)).
@@ -60,7 +60,7 @@ Because the files are downloaded by `curl` rather than a browser, macOS doesn't 
 **Want to read the installer before running it?** This shows the script without running it (press **q** to leave):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | less
+curl -fsSL https://github.com/willholley/stagehand/releases/latest/download/install.sh | less
 ```
 
 <details>
@@ -334,7 +334,7 @@ generated/              created at run time: backups, the install mode from step
 
 Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShell 5.1 misreads non-ASCII characters in files without a byte-order mark) and compatible with bash 3.2. In `install.sh`, keep all code inside functions with `main "$@"` as the last line, and read prompts from `/dev/tty`, because the script arrives on stdin when piped.
 
-**Releases are automatic.** Every merge to `main` publishes a GitHub release (`.github/workflows/release.yml`) with `stagehand.zip` and `VERSION` attached, which is what the installer and the menu's updater download. The version follows semver, worked out from the commit messages since the last release: a `feat!:` prefix or `BREAKING CHANGE` makes it a major release, `feat:` a minor one, and anything else a patch. PRs are squash-merged, so the PR title is what counts: start it with `feat:` or `fix:`.
+**Releases are automatic.** Every merge to `main` publishes a GitHub release (`.github/workflows/release.yml`) with `install.sh`, `stagehand.zip` and `VERSION` attached. The one-line install, the installer and the menu's updater all download from the latest release, so they always match. The version follows semver, worked out from the commit messages since the last release: a `feat!:` prefix or `BREAKING CHANGE` makes it a major release, `feat:` a minor one, and anything else a patch. Every commit in the merge counts, so name commits (or, when squash-merging, the PR title) starting with `feat:` or `fix:`.
 
 To try a branch on a Mac before it's released: `STAGEHAND_BRANCH=my-branch bash install.sh`.
 
