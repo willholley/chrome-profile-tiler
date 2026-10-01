@@ -16,7 +16,8 @@ $Pad        = 7   # compensates for the invisible borders Windows adds around wi
 $ModeFile   = Join-Path $RepoDir "generated\install-mode"
 $StoreUrl   = "https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
 $StoreTimeout = 300
-$CopyStamp  = Join-Path $RepoDir "generated\last-copy"   # written after each copy, to spot later changes to the master
+$CopyStamp  = Join-Path $RepoDir "generated\last-copy"
+$StartupUrlFile = Join-Path $RepoDir "generated\policy-startup-url"   # the startup page Stagehand put in the policy   # written after each copy, to spot later changes to the master
 # Every merge to main is published as a release with these files attached (see .github/workflows)
 $ReleasesUrl = "https://github.com/willholley/stagehand/releases/latest/download"
 if ($env:RELEASES_URL) { $ReleasesUrl = $env:RELEASES_URL }
@@ -169,7 +170,7 @@ function Edit-Settings {
   while ($true) {
     $url = Read-Value "Page to open in every profile" $Cfg["STARTUP_URL"]
     if ($url -match '^https?://\S+$') { break }
-    Write-Host "  Please enter a web address starting with https://"
+    Write-Host "  Please enter a web address starting with https:// (or http://)"
   }
   while ($true) {
     $count = Read-Value "How many profiles" $Cfg["PROFILE_COUNT"]
@@ -185,9 +186,21 @@ function Edit-Settings {
 
   try {
     Set-ConfigValue "STARTUP_URL" $url
-    Set-ConfigValue "PROFILE_COUNT" $count
-    Set-ConfigValue "DELAY_MIN" $dMin
-    Set-ConfigValue "DELAY_MAX" $dMax
+    Set-ConfigValue "PROFILE_COUNT" ([int]$count)
+    Set-ConfigValue "DELAY_MIN" ([int]$dMin)
+    Set-ConfigValue "DELAY_MAX" ([int]$dMax)
+    # The advanced settings are only asked about if they're wrong, so the menu can always start
+    foreach ($k in "INSTALL_TIMEOUT", "MAX_SCREENS") {
+      if ($Cfg[$k] -match '^\d+$') { continue }
+      $def = @{ INSTALL_TIMEOUT = "90"; MAX_SCREENS = "0" }[$k]
+      Write-Host "config.txt has an invalid $k ('$($Cfg[$k])')."
+      while ($true) {
+        $v = Read-Value "$k (a whole number)" $def
+        if ($v -match '^\d+$') { break }
+        Write-Host "  Please enter a whole number."
+      }
+      Set-ConfigValue $k ([int]$v)
+    }
   } catch {
     Write-Host "Couldn't save the settings to ${ConfigFile}: $($_.Exception.Message)" -ForegroundColor Red
     return $false
@@ -270,13 +283,17 @@ function Get-ManagedReasons {
       break
     }
   }
+  # Stagehand only writes machine-wide (HKLM) policies, so its startup settings can only be there,
+  # and only while its extension entry is installed. Every other Chrome policy is the organisation's.
+  $ours = Test-PolicyInstalled
   foreach ($root in "HKLM:\SOFTWARE\Policies\Google\Chrome", "HKCU:\SOFTWARE\Policies\Google\Chrome") {
     if (-not (Test-Path $root)) { continue }
-    $extra = @((Get-Item $root).GetValueNames() | Where-Object { $_ -ne "RestoreOnStartup" })
+    $mine = $ours -and $root.StartsWith("HKLM:")
+    $extra = @((Get-Item $root).GetValueNames() | Where-Object { -not ($mine -and $_ -eq "RestoreOnStartup") })
     foreach ($sub in Get-ChildItem $root) {
       $name = $sub.PSChildName
-      if ($name -eq "RestoreOnStartupURLs") { continue }
-      if ($name -eq "ExtensionInstallForcelist") {
+      if ($mine -and $name -eq "RestoreOnStartupURLs") { continue }
+      if ($mine -and $name -eq "ExtensionInstallForcelist") {
         $others = @(Get-ListEntries "$root\$name" | Where-Object { -not $_.Value.StartsWith("$ExtId;") })
         if ($others.Count -eq 0) { continue }
       }
@@ -308,6 +325,21 @@ function Test-NeedStep1 {
   return $true
 }
 
+# Removes the startup page Stagehand put in the policy (as recorded when it was set, plus the
+# current STARTUP_URL), and the startup setting itself once no startup pages are left.
+# Must run as administrator.
+function Remove-StartupPolicy {
+  $urlKey = "$PolicyRoot\RestoreOnStartupURLs"
+  $urls = @()
+  if (Test-Path $StartupUrlFile) { $urls += ([System.IO.File]::ReadAllText($StartupUrlFile)).Trim() }
+  if ($StartupUrl -ne "") { $urls += $StartupUrl }
+  foreach ($u in ($urls | Where-Object { $_ -ne "" } | Select-Object -Unique)) { Remove-ListEntry $urlKey $u $false }
+  if (-not (Test-Path $urlKey)) {
+    Remove-ItemProperty -Path $PolicyRoot -Name "RestoreOnStartup" -ErrorAction SilentlyContinue
+  }
+  if (Test-Path $StartupUrlFile) { Remove-Item $StartupUrlFile -Force }
+}
+
 function Install-Policy {
   if (-not (Test-Admin)) {
     Write-Host "Windows will now ask for permission (a UAC prompt) to set Chrome's policy..."
@@ -319,11 +351,15 @@ function Install-Policy {
   if (-not (Test-Path $listKey)) { New-Item -Path $listKey -Force | Out-Null }
   Add-ListEntry $listKey "$ExtId;https://clients2.google.com/service/update2/crx" $false
 
+  # Replace the startup page Stagehand set last time, rather than adding another one
+  Remove-StartupPolicy
   if ($SetStartup -and $StartupUrl -ne "") {
     New-ItemProperty -Path $PolicyRoot -Name "RestoreOnStartup" -PropertyType DWord -Value 4 -Force | Out-Null
     $urlKey = "$PolicyRoot\RestoreOnStartupURLs"
     if (-not (Test-Path $urlKey)) { New-Item -Path $urlKey -Force | Out-Null }
     Add-ListEntry $urlKey $StartupUrl $false
+    New-Item -ItemType Directory -Path (Split-Path -Parent $StartupUrlFile) -Force | Out-Null
+    [System.IO.File]::WriteAllText($StartupUrlFile, $StartupUrl)
   }
   Write-Host "Policy written. Chrome picks it up the next time it starts."
   Write-Host "You can confirm at chrome://policy in Chrome."
@@ -336,13 +372,7 @@ function Remove-Policy {
     return
   }
   Remove-ListEntry "$PolicyRoot\ExtensionInstallForcelist" "$ExtId;" $true
-  if ($StartupUrl -ne "") {
-    $urlKey = "$PolicyRoot\RestoreOnStartupURLs"
-    Remove-ListEntry $urlKey $StartupUrl $false
-    if (-not (Test-Path $urlKey)) {
-      Remove-ItemProperty -Path $PolicyRoot -Name "RestoreOnStartup" -ErrorAction SilentlyContinue
-    }
-  }
+  Remove-StartupPolicy
   Write-Host "Policy removed. Restart Chrome; chrome://policy should no longer list these settings."
 }
 
@@ -676,16 +706,15 @@ function Remove-ChromeProfiles {
 
   if (-not (Confirm-ChromeClosed)) { return $false }
 
-  if (-not (Update-LocalState $list)) {
-    Write-Host "I couldn't tidy Chrome's list of profiles (nothing was changed there)."
-    if (-not (Read-YesNo "Delete the folders anyway? Chrome may then show empty leftover entries.")) {
-      Write-Host "Cancelled."
-      return $false
-    }
+  # Delete the folders first, then take only the ones that really went out of Chrome's list,
+  # so a profile that couldn't be deleted stays listed in Chrome
+  $gone = @()
+  try {
+    Add-Type -AssemblyName Microsoft.VisualBasic
+  } catch {
+    Write-Host "Couldn't load what's needed to use the Recycle Bin, so nothing was deleted." -ForegroundColor Yellow
+    return $false
   }
-
-  Add-Type -AssemblyName Microsoft.VisualBasic
-  $moved = 0
   foreach ($p in $list) {
     $dir = Join-Path $UserData $p
     try {
@@ -694,16 +723,19 @@ function Remove-ChromeProfiles {
         [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
         [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
       Write-Host "${p}: deleted"
-      $moved++
+      $gone += $p
     } catch {
-      Write-Host "${p}: couldn't be deleted ($($_.Exception.Message))" -ForegroundColor Yellow
+      Write-Host "${p}: couldn't be deleted, so it was left as it was ($($_.Exception.Message))" -ForegroundColor Yellow
     }
   }
   Write-Host ""
-  Write-Host "Deleted $moved profile(s). Empty the Recycle Bin to free the space."
+  Write-Host "Deleted $($gone.Count) profile(s). Empty the Recycle Bin to free the space."
+  if ($gone.Count -gt 0 -and -not (Update-LocalState $gone)) {
+    Write-Host "I couldn't update Chrome's list of profiles, so it may still show the deleted ones."
+  }
   Write-Host "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   Write-Host "that card and choose Delete."
-  return $true
+  return ($gone.Count -eq $list.Count)
 }
 
 # ---------------------------------------------------------------- tiling
@@ -966,6 +998,20 @@ function Copy-Tree($from, $to, $skip) {
   }
 }
 
+# Deletes whatever is in $installed but not in $new (files a release no longer has),
+# leaving the names in $skip alone
+function Remove-Extra($installed, $new, $skip) {
+  foreach ($item in Get-ChildItem -LiteralPath $installed -Force) {
+    if ($skip -contains $item.Name) { continue }
+    $counterpart = Join-Path $new $item.Name
+    if (-not (Test-Path -LiteralPath $counterpart)) {
+      Remove-Item -LiteralPath $item.FullName -Recurse -Force
+    } elseif ($item.PSIsContainer) {
+      Remove-Extra $item.FullName $counterpart @()
+    }
+  }
+}
+
 # Offers to update to the latest release. Returns $true if it updated, so the menu can restart.
 # Only installed copies have a VERSION file, so a git checkout never updates itself.
 # Quiet when offline.
@@ -998,6 +1044,7 @@ function Update-Stagehand {
     $skip = @("generated")
     if (Test-Path $ConfigFile) { $skip += "config.txt" }
     Copy-Tree $src $RepoDir $skip
+    Remove-Extra $RepoDir $src @("generated", "config.txt")
     Write-Host "Updated to Stagehand $latest (your config.txt was kept)."
     Write-Host ""
     return $true

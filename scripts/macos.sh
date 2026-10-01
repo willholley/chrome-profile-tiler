@@ -83,22 +83,27 @@ chrome_running() { pgrep -x "Google Chrome" >/dev/null 2>&1; }
 # Prints one line for each sign that an organisation (work or school) manages this Mac.
 # Chrome settings that Stagehand installed itself don't count, and nor does Screen Time.
 managed_reasons() {
-  local enrol f extra
+  local enrol f extra ours=0
   enrol="$(profiles status -type enrollment 2>/dev/null)"
   case "$enrol" in *"MDM enrollment: Yes"*) say "it's enrolled in device management (MDM)" ;; esac
   case "$enrol" in *"Enrolled via DEP: Yes"*) say "it was set up by an organisation (Automated Device Enrollment)" ;; esac
   [ -e "/Library/Application Support/Google/CloudManagement" ] && say "Chrome is managed by an organisation (Chrome Enterprise)"
+  # Stagehand installs a per-user settings profile, so only that file can hold its settings,
+  # and only while one of its profiles is installed. Anything else counts as the organisation's.
   for f in "$MANAGED_PREFS_DIR/com.google.Chrome.plist" "$MANAGED_PREFS_DIR/$(id -un)/com.google.Chrome.plist"; do
     [ -f "$f" ] || continue
+    ours=0
+    [ "$f" != "$MANAGED_PREFS_DIR/com.google.Chrome.plist" ] && policy_installed && ours=1
     extra="$(plutil -convert json -o - "$f" 2>/dev/null | perl -MJSON::PP -e '
-      my $ext = shift;
+      my ($ext, $ours) = @ARGV;
       my $d = eval { local $/; decode_json(<STDIN>) } or do { print "unreadable"; exit };
-      my %ours = map { $_ => 1 } qw(ExtensionInstallForcelist RestoreOnStartup RestoreOnStartupURLs PayloadUUID _manualProfile);
-      my @extra = grep { !$ours{$_} } sort keys %$d;
+      my %meta = map { $_ => 1 } qw(PayloadUUID _manualProfile);
+      my %stagehand = map { $_ => 1 } qw(ExtensionInstallForcelist RestoreOnStartup RestoreOnStartupURLs);
+      my @extra = grep { !$meta{$_} && !($ours && $stagehand{$_}) } sort keys %$d;
       push @extra, "ExtensionInstallForcelist"
-        if grep { index($_, "$ext;") != 0 } @{ $d->{ExtensionInstallForcelist} || [] };
+        if $ours && grep { index($_, "$ext;") != 0 } @{ $d->{ExtensionInstallForcelist} || [] };
       push @extra, "settings from device management" unless $d->{_manualProfile};
-      print join(", ", @extra);' "$EXTENSION_ID" 2>/dev/null)"
+      print join(", ", @extra);' "$EXTENSION_ID" "$ours" 2>/dev/null)"
     [ -n "$extra" ] && say "Chrome already has settings from an organisation ($extra)"
   done
 }
@@ -185,6 +190,8 @@ validate_config() {
     if ! [[ "$v" =~ ^[0-9]+$ ]]; then
       say "config.txt: $k must be a whole number."
       bad=1
+    else
+      printf -v "$k" '%d' "$((10#$v))"    # "08" would otherwise be read as octal later
     fi
   done
   if [ "$bad" -eq 0 ]; then
@@ -220,10 +227,11 @@ set_config_value() {
   mv "$tmp" "$CONFIG_FILE"
 }
 
-# ask_value "question" current  ->  prints what was typed, or the current value for Enter
+# ask_value "question" current  ->  prints what was typed, or the current value for Enter.
+# Fails if the input is closed (Ctrl+D), so callers can stop instead of asking forever.
 ask_value() {
   local a
-  read -r -p "$1 [$2]: " a
+  read -r -p "$1 [$2]: " a || return 1
   a="$(trim "$a")"
   printf '%s' "${a:-$2}"
 }
@@ -234,20 +242,42 @@ edit_settings() {
   say "Press Enter to keep the value in [brackets], or type a new one."
   say ""
   while true; do
-    url="$(ask_value "Page to open in every profile" "$STARTUP_URL")"
+    url="$(ask_value "Page to open in every profile" "$STARTUP_URL")" || exit 1
     [[ "$url" =~ ^https?://[^[:space:]]+$ ]] && break
-    say "  Please enter a web address starting with https://"
+    say "  Please enter a web address starting with https:// (or http://)"
   done
   while true; do
-    count="$(ask_value "How many profiles" "$PROFILE_COUNT")"
+    count="$(ask_value "How many profiles" "$PROFILE_COUNT")" || exit 1
     [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -ge 1 ] && break
     say "  Please enter a whole number, 1 or more."
   done
   while true; do
-    dmin="$(ask_value "Shortest pause between opening profiles, in seconds" "$DELAY_MIN")"
-    dmax="$(ask_value "Longest pause between opening profiles, in seconds" "$DELAY_MAX")"
-    [[ "$dmin" =~ ^[0-9]+$ && "$dmax" =~ ^[0-9]+$ ]] && [ "$dmin" -le "$dmax" ] && break
+    dmin="$(ask_value "Shortest pause between opening profiles, in seconds" "$DELAY_MIN")" || exit 1
+    dmax="$(ask_value "Longest pause between opening profiles, in seconds" "$DELAY_MAX")" || exit 1
+    if [[ "$dmin" =~ ^[0-9]+$ && "$dmax" =~ ^[0-9]+$ ]]; then
+      dmin=$((10#$dmin)); dmax=$((10#$dmax))
+      [ "$dmin" -le "$dmax" ] && break
+    fi
     say "  Please enter whole numbers, with the shortest no longer than the longest."
+  done
+  count=$((10#$count))
+
+  # The advanced settings are only asked about if they're wrong, so the menu can always start
+  local k v def
+  for k in INSTALL_TIMEOUT MAX_SCREENS; do
+    eval "v=\$$k"
+    [[ "$v" =~ ^[0-9]+$ ]] && continue
+    case "$k" in
+      INSTALL_TIMEOUT) def=90 ;;
+      MAX_SCREENS)     def=0 ;;
+    esac
+    say "config.txt has an invalid $k ('$v')."
+    while true; do
+      v="$(ask_value "$k (a whole number)" "$def")" || exit 1
+      [[ "$v" =~ ^[0-9]+$ ]] && break
+      say "  Please enter a whole number."
+    done
+    set_config_value "$k" "$((10#$v))" || { say "Couldn't save the settings to $CONFIG_FILE."; return 1; }
   done
 
   if ! { set_config_value STARTUP_URL "$url" && set_config_value PROFILE_COUNT "$count" &&
@@ -316,26 +346,34 @@ EOF
   say "  3. Enter your Mac password if asked."
   say ""
   open "$out"
-  read -r -p "Press Enter once you've installed it... " _
+  local a
+  while true; do
+    read -r -p "Press Enter once you've installed it (or type q to stop)... " a
+    case "$a" in q|Q) return 1 ;; esac
+    policy_installed && break
+    say "It doesn't look installed yet. Check System Settings > Profiles for 'Stagehand Policy'."
+  done
   say ""
-  say "You can confirm it worked later by opening chrome://policy in Chrome."
+  say "Installed. You can also check it in Chrome by opening chrome://policy."
 }
 
+# Removes every Stagehand settings profile that's installed (current and earlier versions).
+# Returns 1 if any is still there afterwards.
 remove_policy() {
   say "Removing the settings profile (you'll be asked for your Mac password)..."
-  local id
-  for id in $OLD_POLICY_IDS; do
-    if profiles list 2>/dev/null | grep -q "$id"; then
-      sudo profiles remove -identifier "$id" 2>/dev/null && say "Removed the settings profile from an earlier version ($id)."
-    fi
+  local id list
+  list="$(profiles list 2>/dev/null)"
+  for id in $POLICY_ID $OLD_POLICY_IDS; do
+    grep -q "$id" <<< "$list" && sudo profiles remove -identifier "$id" 2>/dev/null
   done
-  if sudo profiles remove -identifier "$POLICY_ID" 2>/dev/null; then
+  if ! policy_installed; then
     say "Removed. Restart Chrome; chrome://policy should no longer list these settings."
-  else
-    say "I couldn't remove it automatically. To remove it by hand:"
-    say "  System Settings > search 'Profiles' > select 'Stagehand Policy' > click the minus (-) button."
-    say "  (Earlier versions called it 'Chrome Profile Tiler Policy' or 'Chrome Policy'.)"
+    return 0
   fi
+  say "I couldn't remove it automatically. To remove it by hand:"
+  say "  System Settings > search 'Profiles' > select 'Stagehand Policy' > click the minus (-) button."
+  say "  (Earlier versions called it 'Chrome Profile Tiler Policy' or 'Chrome Policy'.)"
+  return 1
 }
 
 # ---------------------------------------------------------------- profiles
@@ -558,7 +596,11 @@ one_time_setup() {
     say ""
     if ask_yes_no "Is this your own personal computer?"; then
       ensure_chrome_closed || return 1
-      install_policy
+      if ! install_policy; then
+        say ""
+        say "Step 1 isn't finished. Choose it again once you're ready to approve the settings profile."
+        return 1
+      fi
       set_install_mode policy
     else
       say ""
@@ -583,7 +625,7 @@ remove_stagehand() {
     say "Taking that off also removes $EXTENSION_NAME, and its saved settings, from every"
     say "profile that's left, including the master profile if you kept it."
     if ask_yes_no "Take it off now?"; then
-      remove_policy
+      remove_policy || return 1
     else
       say "Left in place. Choose this option again whenever you're ready."
       return 0
@@ -672,26 +714,29 @@ delete_profiles() {
 
   ensure_chrome_closed || return 1
 
-  if ! tidy_local_state "${list[@]}"; then
-    say "I couldn't tidy Chrome's list of profiles (nothing was changed there)."
-    ask_yes_no "Delete the folders anyway? Chrome may then show empty leftover entries." || { say "Cancelled."; return 1; }
-  fi
-
+  # Move the folders first, then take only the ones that really went out of Chrome's list,
+  # so a profile that couldn't be moved stays listed in Chrome
+  local gone=()
   trash="$HOME/.Trash"
   stamp="$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$trash"
   for p in "${list[@]}"; do
     if mv "$CHROME_DIR/$p" "$trash/Chrome $p $stamp"; then
       say "$p: moved to the Trash"
+      gone+=("$p")
       moved=$((moved + 1))
     else
-      say "$p: couldn't be moved"
+      say "$p: couldn't be moved, so it was left as it was"
     fi
   done
   say ""
   say "Deleted $moved profile(s). Empty the Trash to free the space."
+  if [ "$moved" -gt 0 ] && ! tidy_local_state "${gone[@]}"; then
+    say "I couldn't update Chrome's list of profiles, so it may still show the deleted ones."
+  fi
   say "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   say "that card and choose Delete."
+  [ "$moved" -eq "${#list[@]}" ]
 }
 
 # ---------------------------------------------------------------- tiling
@@ -970,7 +1015,7 @@ main() {
   local choice
   while true; do
     show_menu
-    read -r -p "Choose an option: " choice
+    read -r -p "Choose an option: " choice || { say ""; exit 0; }   # input closed (Ctrl+D)
     say ""
     case "$choice" in
       1) one_time_setup ;;

@@ -1,15 +1,20 @@
 # Publishes a GitHub release for every push to main.
 #
-# The version is worked out from the commit messages since the last release:
-#   "feat!: ..." or "BREAKING CHANGE" -> major,  "feat: ..." -> minor,  anything else -> patch.
-# With squash merges the PR title becomes the commit message, so start PR titles with
-# feat: or fix: as appropriate. The first release is 1.0.0.
+# The version is worked out from the commits since the last release, following Conventional
+# Commits: a subject like "feat!: ..." (any type with "!") or a "BREAKING CHANGE:" footer ->
+# major, a "feat: ..." subject -> minor, anything else -> patch. Only commit subjects count for
+# feat/!, so a body line starting "feat:" doesn't bump the version. With squash merges the PR
+# title becomes the subject, so start PR titles with feat: or fix:. The first release is 1.0.0.
 #
 # Each release has three files attached, which are downloaded from the stable
 # .../releases/latest/download/<file> URLs:
 #   install.sh     the Mac installer (the README's one-line install pipes it into bash)
 #   stagehand.zip  the tool, in a "stagehand" folder, with a VERSION file inside
 #   VERSION        just the version number, so the tool can check for updates cheaply
+#
+# The release is created as a draft, the files are uploaded, and only then is it published, so
+# "latest" never points at a release with missing files. Re-running the workflow repairs a
+# release whose uploads failed.
 
 name: Release
 
@@ -20,6 +25,9 @@ on:
 permissions:
   contents: write
 
+# One release at a time. If several pushes queue up, GitHub keeps only the newest pending run;
+# its release still includes the skipped pushes' changes, because the version and notes cover
+# everything since the last release. So releases can be coalesced, but nothing is lost.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -32,33 +40,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Work out the next version
+      - name: Work out the version
         id: version
         run: |
           last="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
           if [ -z "$last" ]; then
             next="1.0.0"
           elif [ "$(git rev-list -n 1 "$last")" = "$GITHUB_SHA" ]; then
-            echo "This commit is already released as $last."
-            echo "skip=1" >> "$GITHUB_OUTPUT"
-            exit 0
+            # Already released: build it again so the publish step can repair missing files
+            next="${last#v}"
+            echo "This commit is already released as $last; checking its files."
           else
-            log="$(git log --format='%s%n%b' "$last..HEAD")"
+            subjects="$(git log --format='%s' "$last..HEAD")"
+            bodies="$(git log --format='%b' "$last..HEAD")"
             IFS=. read -r major minor patch <<< "${last#v}"
-            if grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE' <<< "$log"; then
+            if grep -qE '^[a-z]+(\([^)]*\))?!:' <<< "$subjects" ||
+               grep -qE '^BREAKING[ -]CHANGE:' <<< "$bodies"; then
               major=$((major + 1)); minor=0; patch=0
-            elif grep -qE '^feat(\([^)]*\))?:' <<< "$log"; then
+            elif grep -qE '^feat(\([^)]*\))?:' <<< "$subjects"; then
               minor=$((minor + 1)); patch=0
             else
               patch=$((patch + 1))
             fi
             next="$major.$minor.$patch"
           fi
-          echo "Next version: $next (last release: ${last:-none})"
+          echo "Version: $next (last release: ${last:-none})"
           echo "version=$next" >> "$GITHUB_OUTPUT"
 
       - name: Build stagehand.zip
-        if: steps.version.outputs.skip != '1'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -71,12 +80,21 @@ jobs:
           unzip -l build/stagehand.zip
 
       - name: Publish the release
-        if: steps.version.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "v$VERSION" build/install.sh build/stagehand.zip build/VERSION \
-            --target "$GITHUB_SHA" \
-            --title "Stagehand $VERSION" \
-            --generate-notes
+          tag="v$VERSION"
+          files=(build/install.sh build/stagehand.zip build/VERSION)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A draft left by a failed run, or a published release with missing files
+            echo "$tag already exists; uploading its files again."
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "Stagehand $VERSION" \
+              --generate-notes
+          fi
+          gh release edit "$tag" --draft=false --latest

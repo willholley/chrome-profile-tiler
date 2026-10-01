@@ -80,22 +80,30 @@ main() {
   SRC="$(find "$TMP/unzipped" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [ -n "$SRC" ] && [ -f "$SRC/scripts/macos.sh" ] || fail "The download didn't contain the expected files."
 
-  # Keep the user's settings and backups across updates
+  # Keep the user's settings and backups across updates: copy them into the new files first,
+  # so nothing is lost if a later step fails
   FRESH=1
-  KEEP="$TMP/keep"
-  mkdir -p "$KEEP"
   if [ -f "$DEST/config.txt" ]; then
     FRESH=0
-    cp "$DEST/config.txt" "$KEEP/config.txt"
+    cp "$DEST/config.txt" "$SRC/config.txt" || fail "Couldn't copy your config.txt."
   fi
-  [ -d "$DEST/generated" ] && cp -R "$DEST/generated" "$KEEP/generated"
+  if [ -d "$DEST/generated" ]; then
+    cp -R "$DEST/generated" "$SRC/generated" || fail "Couldn't copy your generated folder."
+  fi
 
-  rm -rf "$DEST"
-  mkdir -p "$(dirname "$DEST")"
-  mv "$SRC" "$DEST" || fail "Couldn't move files into $DEST."
-
-  [ -f "$KEEP/config.txt" ] && cp "$KEEP/config.txt" "$DEST/config.txt"
-  [ -d "$KEEP/generated" ] && cp -R "$KEEP/generated" "$DEST/generated"
+  # Swap the folders, keeping the old one until the new one is in place
+  mkdir -p "$(dirname "$DEST")" || fail "Couldn't create $(dirname "$DEST")."
+  PREV=""
+  if [ -e "$DEST" ]; then
+    PREV="$DEST.previous.$$"
+    mv "$DEST" "$PREV" || fail "Couldn't move the old version out of the way. Nothing was changed."
+  fi
+  if ! mv "$SRC" "$DEST"; then
+    rm -rf "$DEST"
+    [ -n "$PREV" ] && mv "$PREV" "$DEST"
+    fail "Couldn't move the new files into $DEST. Your existing install was left as it was."
+  fi
+  [ -n "$PREV" ] && rm -rf "$PREV"
 
   chmod +x "$DEST/scripts/macos.sh" "$DEST/Start (Mac).command" 2>/dev/null
   command -v xattr >/dev/null 2>&1 && xattr -dr com.apple.quarantine "$DEST" 2>/dev/null

@@ -267,7 +267,7 @@ Being upfront, because some of this is unusual:
 - **On your own computer, it sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs Lightning Autofill and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just the ones this tool makes. Chrome will show "Managed by your organization", and the extension can't be removed by hand while the policy is in place. Removing the policy later removes the extension too (see [Undoing everything](#undoing-everything)). On a work or school computer it never does this.
 - **It copies the extension's saved data** between profile folders inside Chrome's data directory. This isn't an official Chrome feature, so it can fail in some situations (see above). What was there before is backed up to a `generated/` folder inside this project.
 - **It closes Chrome** (after asking) for the steps that need it. Save your work first.
-- **Your normal Chrome profile (`Default`) is never touched** by any step.
+- **Stagehand never creates, copies into, launches or deletes your normal Chrome profile (`Default`).** But on your own computer, the Chrome policy from step 1 applies to every profile, `Default` included: Lightning Autofill is installed there too, and `Default` opens on `STARTUP_URL` if `SET_STARTUP_PAGE` is on. Taking the policy off (option 7) undoes both. On a work or school computer, nothing reaches `Default`.
 
 ---
 
@@ -334,7 +334,7 @@ generated/              created at run time: backups, the install mode from step
 
 Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShell 5.1 misreads non-ASCII characters in files without a byte-order mark) and compatible with bash 3.2. In `install.sh`, keep all code inside functions with `main "$@"` as the last line, and read prompts from `/dev/tty`, because the script arrives on stdin when piped.
 
-**Releases are automatic.** Every merge to `main` publishes a GitHub release (`.github/workflows/release.yml`) with `install.sh`, `stagehand.zip` and `VERSION` attached. The one-line install, the installer and the menu's updater all download from the latest release, so they always match. The version follows semver, worked out from the commit messages since the last release: a `feat!:` prefix or `BREAKING CHANGE` makes it a major release, `feat:` a minor one, and anything else a patch. Every commit in the merge counts, so name commits (or, when squash-merging, the PR title) starting with `feat:` or `fix:`.
+**Releases are automatic.** Every merge to `main` publishes a GitHub release (`.github/workflows/release.yml`) with `install.sh`, `stagehand.zip` and `VERSION` attached. The one-line install, the installer and the menu's updater all download from the latest release, so they always match. The version follows semver, worked out from the commits since the last release using [Conventional Commits](https://www.conventionalcommits.org/): a subject with `!` (such as `feat!:` or `fix!:`) or a `BREAKING CHANGE:` footer makes it a major release, a `feat:` subject a minor one, and anything else a patch. Only commit subjects count for `feat:` and `!`, and every commit in the merge counts, so start commit subjects (or, when squash-merging, the PR title) with `feat:` or `fix:`. Releases are published only after all three files are uploaded; if an upload fails, re-running the workflow repairs the release.
 
 To try a branch on a Mac before it's released: `STAGEHAND_BRANCH=my-branch bash install.sh`.
 
