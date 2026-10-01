@@ -25,6 +25,9 @@ EXTENSION_NAME="Lightning Autofill"
 # Its settings get copied into Profile 1 ... Profile N.
 MASTER_PROFILE="Autofill Master"
 
+# Every merge to main is published as a release with these files attached (see .github/workflows)
+RELEASES_URL="${RELEASES_URL:-https://github.com/willholley/stagehand/releases/latest/download}"
+
 # ---- defaults (config.txt overrides these) ----
 STARTUP_URL=""
 SET_STARTUP_PAGE="yes"
@@ -809,7 +812,45 @@ show_menu() {
   fi
 }
 
+# ---------------------------------------------------------------- updates
+
+# $1 newer than $2? Both are versions like 1.4.2.
+version_newer() {
+  local a1 a2 a3 b1 b2 b3
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r a1 a2 a3 <<< "$1"
+  IFS=. read -r b1 b2 b3 <<< "$2"
+  [ "$a1" -ne "$b1" ] && { [ "$a1" -gt "$b1" ]; return; }
+  [ "$a2" -ne "$b2" ] && { [ "$a2" -gt "$b2" ]; return; }
+  [ "$a3" -gt "$b3" ]
+}
+
+# Offers to update to the latest release, then restarts the menu. Only installed copies
+# have a VERSION file, so a git checkout never updates itself. Quiet when offline.
+check_for_update() {
+  [ -n "$STAGEHAND_NO_UPDATE" ] && return 0
+  [ -f "$REPO_DIR/VERSION" ] || return 0
+  local here latest a
+  here="$(tr -d '[:space:]' < "$REPO_DIR/VERSION")"
+  latest="$(curl -fsSL --max-time 5 "$RELEASES_URL/VERSION" 2>/dev/null | tr -d '[:space:]')"
+  version_newer "$latest" "$here" || return 0
+
+  say "A new version of Stagehand is available ($here -> $latest)."
+  say "Your settings and backups are kept."
+  read -r -p "Update now? [Y/n] " a
+  case "$a" in n|N|no|NO) return 0 ;; esac
+  cd / || return 0    # the installer replaces the folder this script lives in
+  if STAGEHAND_UPDATE=1 STAGEHAND_DIR="$REPO_DIR" STAGEHAND_ZIP_URL="$RELEASES_URL/stagehand.zip" \
+      bash "$REPO_DIR/install.sh" </dev/null; then
+    say ""
+    STAGEHAND_NO_UPDATE=1 exec bash "$REPO_DIR/scripts/macos.sh"
+  fi
+  say "The update didn't work, so carrying on with $here."
+  pause
+}
+
 main() {
+  check_for_update
   load_config || { pause; exit 1; }
   validate_config || { pause; exit 1; }
   if ! chrome_installed; then
