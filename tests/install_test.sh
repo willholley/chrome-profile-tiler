@@ -54,8 +54,9 @@ check_not "the zip leaves out tests" contains "$listing" "stagehand/tests"
 unzip -q "$ZIP" -d "$WORK/unzipped"
 Z="$WORK/unzipped/stagehand"
 crlf() { grep -q $'\r' "$1"; }
-check     "windows.ps1 has Windows line endings"      crlf "$Z/scripts/windows.ps1"
-check     "Start (Windows).bat has Windows line endings" crlf "$Z/Start (Windows).bat"
+all_crlf() { ! grep -qv $'\r$' "$1"; }    # every line, so a mix of endings fails too
+check     "windows.ps1 has Windows line endings"      all_crlf "$Z/scripts/windows.ps1"
+check     "Start (Windows).bat has Windows line endings" all_crlf "$Z/Start (Windows).bat"
 check_not "macos.sh has Unix line endings"            crlf "$Z/scripts/macos.sh"
 check_not "install.sh has Unix line endings"          crlf "$Z/install.sh"
 check_not "Start (Mac).command has Unix line endings" crlf "$Z/Start (Mac).command"
