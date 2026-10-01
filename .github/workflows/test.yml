@@ -22,8 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, so the results don't change when the runner's own copy is updated
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" |
+            tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+
       - name: Shellcheck
-        run: shellcheck -x install.sh scripts/macos.sh "Start (Mac).command" .github/build.sh tests/*.sh
+        run: shellcheck --version && shellcheck -x install.sh scripts/macos.sh "Start (Mac).command" .github/build.sh tests/*.sh
 
       - name: windows.ps1 is ASCII only
         # Windows PowerShell 5.1 misreads non-ASCII characters in a file without a byte-order mark

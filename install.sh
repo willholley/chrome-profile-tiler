@@ -78,7 +78,9 @@ main() {
     fail "Download failed. Check your internet connection, and that the repository is public and has a release: $ZIP_URL"
   unzip -q "$TMP/project.zip" -d "$TMP/unzipped" || fail "Couldn't unzip the download."
   SRC="$(find "$TMP/unzipped" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  [ -n "$SRC" ] && [ -f "$SRC/scripts/macos.sh" ] || fail "The download didn't contain the expected files."
+  if [ -z "$SRC" ] || [ ! -f "$SRC/scripts/macos.sh" ]; then
+    fail "The download didn't contain the expected files."
+  fi
 
   # Keep the user's settings and backups across updates: copy them into the new files first,
   # so nothing is lost if a later step fails
