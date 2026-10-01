@@ -1,20 +1,25 @@
 #!/bin/bash
-# Chrome Profile Tiler - macOS
+# Stagehand - macOS
 # Written for bash 3.2, the version that ships with macOS.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${CONFIG_FILE:-$REPO_DIR/config.txt}"
 CHROME_DIR="${CHROME_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
-POLICY_ID="com.local.chrome-profile-tiler"
+POLICY_ID="com.local.chrome-profile-tiler"  # kept from the old name so existing installs can still be removed
+
+# Lightning Autofill is the only extension this tool manages
+EXTENSION_ID="nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
+EXTENSION_NAME="Lightning Autofill"
+
+# The master profile: a dedicated Chrome profile where Lightning Autofill is set up by hand.
+# Its settings get copied into Profile 1 ... Profile N.
+MASTER_PROFILE="Autofill Master"
 
 # ---- defaults (config.txt overrides these) ----
-EXTENSION_ID="nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
 STARTUP_URL=""
 SET_STARTUP_PAGE="yes"
 PROFILE_COUNT=12
-SOURCE_PROFILE="Profile 1"
-COPY_TO="ALL"
 DELAY_MIN=45
 DELAY_MAX=75
 INSTALL_TIMEOUT=90
@@ -45,6 +50,15 @@ trim() {
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# Total size of the files in a folder, in KB. Uses real file sizes, not disk blocks
+# (disk usage rounds every tiny file up to 4 KB, which would hide the difference
+# between a fresh and a set-up profile).
+dir_kb() {
+  local bytes
+  bytes="$(find "$1" -type f -exec cat {} + 2>/dev/null | wc -c | tr -d ' ')"
+  echo $(( (bytes + 512) / 1024 ))
 }
 
 chrome_installed() {
@@ -92,7 +106,7 @@ load_config() {
     key="$(trim "${line%%=*}")"
     val="$(trim "${line#*=}")"
     case "$key" in
-      EXTENSION_ID|STARTUP_URL|SET_STARTUP_PAGE|PROFILE_COUNT|SOURCE_PROFILE|COPY_TO|DELAY_MIN|DELAY_MAX|INSTALL_TIMEOUT|MAX_SCREENS)
+      STARTUP_URL|SET_STARTUP_PAGE|PROFILE_COUNT|DELAY_MIN|DELAY_MAX|INSTALL_TIMEOUT|MAX_SCREENS)
         printf -v "$key" '%s' "$val" ;;
     esac
   done < "$CONFIG_FILE"
@@ -101,10 +115,6 @@ load_config() {
 
 validate_config() {
   local bad=0 k v
-  if ! [[ "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
-    say "config.txt: EXTENSION_ID should be 32 letters (a-p). Copy it from the Chrome Web Store URL."
-    bad=1
-  fi
   for k in PROFILE_COUNT DELAY_MIN DELAY_MAX INSTALL_TIMEOUT MAX_SCREENS; do
     eval "v=\$$k"
     if ! [[ "$v" =~ ^[0-9]+$ ]]; then
@@ -115,10 +125,6 @@ validate_config() {
   if [ "$bad" -eq 0 ]; then
     [ "$PROFILE_COUNT" -lt 1 ] && { say "config.txt: PROFILE_COUNT must be at least 1."; bad=1; }
     [ "$DELAY_MIN" -gt "$DELAY_MAX" ] && { say "config.txt: DELAY_MIN can't be bigger than DELAY_MAX."; bad=1; }
-  fi
-  if ! [[ "$SOURCE_PROFILE" =~ ^(Default|Profile\ [0-9]+)$ ]]; then
-    say "config.txt: SOURCE_PROFILE should look like 'Profile 2' or 'Default'."
-    bad=1
   fi
   [ "$bad" -ne 0 ] && return 1
 
@@ -132,7 +138,7 @@ validate_config() {
 
 install_policy() {
   local out_dir="$REPO_DIR/generated"
-  local out="$out_dir/Chrome-Profile-Tiler-Policy.mobileconfig"
+  local out="$out_dir/Stagehand-Policy.mobileconfig"
   mkdir -p "$out_dir"
 
   local startup=""
@@ -151,7 +157,7 @@ install_policy() {
   <key>PayloadVersion</key><integer>1</integer>
   <key>PayloadIdentifier</key><string>$POLICY_ID</string>
   <key>PayloadUUID</key><string>$(uuidgen)</string>
-  <key>PayloadDisplayName</key><string>Chrome Profile Tiler Policy</string>
+  <key>PayloadDisplayName</key><string>Stagehand Policy</string>
   <key>PayloadDescription</key><string>Installs one Chrome extension and sets a startup page in every Chrome profile.</string>
   <key>PayloadContent</key>
   <array>
@@ -177,7 +183,7 @@ EOF
   say "  1. Open System Settings and search for 'Profiles'"
   say "     (on some macOS versions: Privacy & Security > Profiles,"
   say "      on others: General > Device Management)."
-  say "  2. Double-click 'Chrome Profile Tiler Policy' and click Install."
+  say "  2. Double-click 'Stagehand Policy' and click Install."
   say "  3. Enter your Mac password if asked."
   say ""
   open "$out"
@@ -192,96 +198,94 @@ remove_policy() {
     say "Removed. Restart Chrome; chrome://policy should no longer list these settings."
   else
     say "I couldn't remove it automatically. To remove it by hand:"
-    say "  System Settings > search 'Profiles' > select 'Chrome Profile Tiler Policy' > click the minus (-) button."
+    say "  System Settings > search 'Profiles' > select 'Stagehand Policy' > click the minus (-) button."
+    say "  (If you installed it before the tool was renamed, it's called 'Chrome Profile Tiler Policy'.)"
   fi
 }
 
 # ---------------------------------------------------------------- profiles
 
-create_profiles() {
-  ensure_chrome_closed || return 1
-  say "Opening each profile once so Chrome installs the extension."
-  say "(Profiles that don't exist yet are created.)"
-  local total=${#PROFILES[@]} i=0 p waited ext_dir
-  local missing=0
-  for p in "${PROFILES[@]}"; do
-    i=$((i + 1))
-    ext_dir="$CHROME_DIR/$p/Extensions/$EXTENSION_ID"
-    say "[$(date +%H:%M:%S)] ($i/$total) $p"
+# Opens one profile just long enough for the policy to install the extension in it.
+# Returns 0 if the extension is there afterwards, 1 if it never appeared.
+install_extension_in() {
+  local p="$1" ext_dir waited=0
+  ext_dir="$CHROME_DIR/$p/Extensions/$EXTENSION_ID"
+  if [ ! -d "$ext_dir" ]; then
     open -na "Google Chrome" --args --profile-directory="$p" about:blank
-    waited=0
     while [ ! -d "$ext_dir" ] && [ "$waited" -lt "$INSTALL_TIMEOUT" ]; do
       sleep 2
       waited=$((waited + 2))
     done
-    if [ -d "$ext_dir" ]; then
-      sleep 4
-      say "    extension installed"
-    else
-      say "    WARNING: the extension didn't appear within ${INSTALL_TIMEOUT}s."
-      missing=$((missing + 1))
-    fi
+    [ -d "$ext_dir" ] && sleep 4
     quit_chrome
-  done
-  if [ "$missing" -gt 0 ]; then
-    say ""
-    say "$missing profile(s) did not get the extension. Check that the settings profile"
-    say "is installed (open chrome://policy in Chrome), then run this step again."
-    return 1
   fi
-  return 0
+  [ -d "$ext_dir" ]
 }
 
-open_primary() {
-  say "Opening $SOURCE_PROFILE."
-  say "Set up the extension there (its options/settings page), then close Chrome"
-  say "completely and choose 'Copy primary settings' from the menu."
-  open -na "Google Chrome" --args --profile-directory="$SOURCE_PROFILE" chrome://extensions
+open_master() {
+  say "Opening the master profile."
+  say "This is a separate Chrome profile just for setting up $EXTENSION_NAME by hand."
+  say "The first time, it can take up to a minute for the extension to appear."
+  say ""
+  say "When Chrome opens:"
+  say "  - If it asks you to sign in or turn on sync, choose 'Don't sign in'."
+  say "  - Follow your Autofill instructions to set up $EXTENSION_NAME."
+  say "  - When you've finished and clicked Save, close Chrome completely (Cmd+Q)."
+  say "Then come back here and choose step 3."
+  open -na "Google Chrome" --args --profile-directory="$MASTER_PROFILE" --new-window
 }
 
 # Prints the profiles that should receive settings, one per line
-copy_targets() {
-  local p x
-  if [ -z "$COPY_TO" ] || [ "$COPY_TO" = "ALL" ]; then
-    for p in "${PROFILES[@]}"; do
-      [ "$p" != "$SOURCE_PROFILE" ] && printf '%s\n' "$p"
-    done
-  else
-    printf '%s\n' "$COPY_TO" | tr ',' '\n' | while IFS= read -r x; do
-      x="$(trim "$x")"
-      if [ -n "$x" ] && [ "$x" != "$SOURCE_PROFILE" ]; then printf '%s\n' "$x"; fi
-    done
-  fi
-}
 
-copy_settings() {
-  local src="$CHROME_DIR/$SOURCE_PROFILE"
-  if [ ! -d "$src/Local Extension Settings/$EXTENSION_ID" ]; then
-    say "$SOURCE_PROFILE has no saved settings for this extension yet."
-    say "Choose 'Open primary profile' from the menu, set the extension up, close Chrome, then try again."
+copy_master() {
+  local src="$CHROME_DIR/$MASTER_PROFILE"
+  local src_local="$src/Local Extension Settings/$EXTENSION_ID"
+  if [ ! -d "$src_local" ]; then
+    say "The master profile has no $EXTENSION_NAME settings yet."
+    say "Choose step 2, set up $EXTENSION_NAME there and click Save, close Chrome,"
+    say "then come back to step 3."
     return 1
   fi
-
-  local targets p a copied=0
-  targets=()
-  while IFS= read -r p; do
-    [ -n "$p" ] && targets+=("$p")
-  done < <(copy_targets)
-  if [ ${#targets[@]} -eq 0 ]; then
-    say "There are no other profiles to copy to (check COPY_TO in config.txt)."
-    return 1
+  local kb
+  kb="$(dir_kb "$src_local")"
+  if [ "$kb" -lt 8 ]; then
+    say "The master profile's $EXTENSION_NAME looks almost empty (${kb} KB of settings)."
+    say "Did you activate it, import the rules and click Save? A set-up profile is usually much bigger."
+    ask_yes_no "Copy it anyway?" || { say "Cancelled."; return 1; }
   fi
-  say "This will REPLACE the extension's saved settings in these profiles"
-  say "with the settings from $SOURCE_PROFILE:"
-  printf '  - %s\n' "${targets[@]}"
-  say "(Whatever is there now is backed up first.)"
+
+  say "This copies the master profile's $EXTENSION_NAME settings (key, rules and options) into"
+  say "Profile 1 - Profile $PROFILE_COUNT, creating any of those profiles that don't exist yet."
+  say "Anything $EXTENSION_NAME has stored in them is replaced (it's backed up first)."
   ask_yes_no "Continue?" || { say "Cancelled."; return 1; }
   ensure_chrome_closed || return 1
 
-  local backup="$REPO_DIR/generated/backup-$(date +%Y%m%d-%H%M%S)"
-  for p in "${targets[@]}"; do
-    if [ ! -d "$CHROME_DIR/$p" ]; then
-      say "$p: profile folder doesn't exist yet (run first-time setup) - skipped"
+  # 1. make sure every profile exists and has the extension installed
+  local p i=0 total=${#PROFILES[@]} tried=0
+  for p in "${PROFILES[@]}"; do
+    i=$((i + 1))
+    [ -d "$CHROME_DIR/$p/Extensions/$EXTENSION_ID" ] && continue
+    tried=$((tried + 1))
+    say "[$(date +%H:%M:%S)] ($i/$total) $p: creating it and installing the extension..."
+    if install_extension_in "$p"; then
+      say "    done"
+    else
+      say "    WARNING: the extension didn't appear within ${INSTALL_TIMEOUT}s."
+      if [ "$tried" -eq 1 ]; then
+        say ""
+        say "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
+        say "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        return 1
+      fi
+    fi
+  done
+
+  # 2. copy the master's settings into each profile
+  local a copied=0 backup
+  backup="$REPO_DIR/generated/backup-$(date +%Y%m%d-%H%M%S)"
+  for p in "${PROFILES[@]}"; do
+    if [ ! -d "$CHROME_DIR/$p/Extensions/$EXTENSION_ID" ]; then
+      say "$p: skipped (the extension isn't installed there)"
       continue
     fi
     for a in "Local Extension Settings" "Sync Extension Settings"; do
@@ -300,55 +304,168 @@ copy_settings() {
   done
 
   say ""
-  say "Copied settings from $SOURCE_PROFILE to $copied profile(s)."
-  [ -d "$backup" ] && say "Previous settings were backed up to: $backup"
-  say "If a profile is signed in to a Google account with Chrome sync on, Chrome may"
-  say "overwrite the copy. Use the extension's own Export/Import for those."
+  say "Copied the master profile to $copied of $total profiles."
+  [ -d "$backup" ] && say "What was there before is backed up in: $backup"
+  say ""
+  say "Next, check one copy: open it (step 4 or 5), then in $EXTENSION_NAME's Options look for"
+  say "'Activated' on the Settings tab and your rules on the Form Fields tab."
   return 0
 }
 
 show_status() {
   say "Chrome data folder: $CHROME_DIR"
-  say "Extension: $EXTENSION_ID"
+  say "Extension: $EXTENSION_NAME ($EXTENSION_ID)"
   if profiles list 2>/dev/null | grep -q "$POLICY_ID"; then
     say "Policy settings profile: installed"
   else
     say "Policy settings profile: not detected here (confirm at chrome://policy in Chrome)"
   fi
   say ""
-  printf '%-12s %-11s %s\n' "PROFILE" "EXTENSION" "SAVED SETTINGS"
+  printf '%-18s %-11s %s\n' "PROFILE" "EXTENSION" "SAVED SETTINGS"
   local p list inst size d note
-  list=("$SOURCE_PROFILE")
-  for p in "${PROFILES[@]}"; do
-    [ "$p" != "$SOURCE_PROFILE" ] && list+=("$p")
-  done
+  list=("$MASTER_PROFILE")
+  for p in "${PROFILES[@]}"; do list+=("$p"); done
   for p in "${list[@]}"; do
+    note=""
+    [ "$p" = "$MASTER_PROFILE" ] && note="   <- master"
     if [ ! -d "$CHROME_DIR/$p" ]; then
-      printf '%-12s %s\n' "$p" "(profile not created yet)"
+      printf '%-18s %s%s\n' "$p" "(not created yet)" "$note"
       continue
     fi
     inst="no"
     [ -d "$CHROME_DIR/$p/Extensions/$EXTENSION_ID" ] && inst="yes"
     d="$CHROME_DIR/$p/Local Extension Settings/$EXTENSION_ID"
     size="none"
-    [ -d "$d" ] && size="$(du -sk "$d" | cut -f1) KB"
-    note=""
-    [ "$p" = "$SOURCE_PROFILE" ] && note="   <- primary"
-    printf '%-12s %-11s %s%s\n' "$p" "$inst" "$size" "$note"
+    [ -d "$d" ] && size="$(dir_kb "$d") KB"
+    printf '%-18s %-11s %s%s\n' "$p" "$inst" "$size" "$note"
   done
   say ""
-  say "Tip: a configured profile usually has a much larger 'saved settings' size than a fresh one."
+  say "A profile that has been set up usually shows a much bigger 'saved settings' size than a"
+  say "fresh one. After step 3, every copy should be close to the master's size."
 }
 
-first_time_setup() {
+one_time_setup() {
   ensure_chrome_closed || return 1
   install_policy
-  create_profiles || return 1
   say ""
-  say "First-time setup finished. Next:"
-  say "  2) Open primary profile - configure the extension there"
-  say "  3) Copy primary settings to the other profiles"
-  say "  4) Launch all profiles, tiled"
+  say "One-time setup finished. Next, choose step 2 to open the master profile."
+}
+
+# ---------------------------------------------------------------- uninstall
+
+confirm_policy_removal() {
+  say "Heads up: removing the policy also removes $EXTENSION_NAME."
+  say "Chrome treats the extension as managed by the policy, so it will uninstall it from"
+  say "EVERY profile the next time Chrome starts, along with the extension's saved settings."
+  say "The startup page set by the policy goes away too."
+  say ""
+  say "Only continue if you're finished with the extension, or you plan to install it"
+  say "yourself from the Chrome Web Store afterwards (it will start empty)."
+  say ""
+  ask_yes_no "Remove the policy anyway?"
+}
+
+# Removes the given profile folders from Chrome's profile list (the "Local State" file).
+# Chrome must be closed. Keeps a backup copy and puts it back if anything goes wrong.
+tidy_local_state() {
+  local ls="$CHROME_DIR/Local State"
+  [ -f "$ls" ] || return 0
+  command -v perl >/dev/null 2>&1 || return 1
+  mkdir -p "$REPO_DIR/generated"
+  local bk="$REPO_DIR/generated/Local State.backup-$(date +%Y%m%d-%H%M%S)"
+  cp "$ls" "$bk" || return 1
+  if perl - "$ls" "$@" 2>/dev/null <<'PERL'
+use strict; use warnings; use JSON::PP;
+my ($path, @drop) = @ARGV;
+my %drop = map { $_ => 1 } @drop;
+open my $in, '<:raw', $path or die "read: $!";
+my $txt = do { local $/; <$in> };
+close $in;
+my $json = JSON::PP->new->utf8->allow_nonref;
+my $d = $json->decode($txt);
+my $p = (ref $d eq 'HASH') ? $d->{profile} : undef;
+if (ref $p eq 'HASH') {
+  if (ref $p->{info_cache} eq 'HASH') {
+    delete $p->{info_cache}{$_} for grep { $drop{$_} } keys %{ $p->{info_cache} };
+  }
+  for my $k (qw(profiles_order last_active_profiles)) {
+    $p->{$k} = [ grep { !$drop{$_} } @{ $p->{$k} } ] if ref $p->{$k} eq 'ARRAY';
+  }
+  $p->{last_used} = 'Default'
+    if defined $p->{last_used} && !ref $p->{last_used} && $drop{ $p->{last_used} };
+}
+my $out = $json->encode($d);
+$json->decode($out);   # must parse again before anything is overwritten
+open my $o, '>:raw', "$path.tmp" or die "write: $!";
+print $o $out;
+close $o or die "close: $!";
+rename "$path.tmp", $path or die "rename: $!";
+PERL
+  then
+    return 0
+  else
+    cp "$bk" "$ls" 2>/dev/null
+    return 1
+  fi
+}
+
+delete_profiles() {
+  local p existing list typed trash stamp moved=0
+  existing=()
+  for p in "${PROFILES[@]}"; do
+    [ "$p" = "Default" ] && continue      # the Default profile is never touched
+    [ -d "$CHROME_DIR/$p" ] && existing+=("$p")
+  done
+  if [ ${#existing[@]} -eq 0 ] && [ ! -d "$CHROME_DIR/$MASTER_PROFILE" ]; then
+    say "None of the profiles exist, so there's nothing to delete."
+    return 0
+  fi
+
+  list=("${existing[@]}")
+  if [ -d "$CHROME_DIR/$MASTER_PROFILE" ]; then
+    say "Your master profile ($MASTER_PROFILE) is where $EXTENSION_NAME is set up by hand."
+    say "Keeping it means you can copy it into new profiles again later."
+    ask_yes_no "Delete the master profile too?" && list+=("$MASTER_PROFILE")
+  fi
+  if [ ${#list[@]} -eq 0 ]; then
+    say "Nothing left to delete."
+    return 0
+  fi
+
+  say ""
+  say "These profiles will be DELETED:"
+  printf '  - %s\n' "${list[@]}"
+  say ""
+  say "Everything in them goes: browsing history, bookmarks, saved passwords, cookies and"
+  say "any accounts signed in there. Your Default profile is never touched."
+  say "The folders are moved to the Trash, so you can still get them back until you empty it."
+  say ""
+  read -r -p "Type DELETE (in capitals) to continue: " typed
+  if [ "$typed" != "DELETE" ]; then say "Cancelled."; return 1; fi
+
+  ensure_chrome_closed || return 1
+
+  if ! tidy_local_state "${list[@]}"; then
+    say "I couldn't tidy Chrome's list of profiles (nothing was changed there)."
+    ask_yes_no "Delete the folders anyway? Chrome may then show empty leftover entries." || { say "Cancelled."; return 1; }
+  fi
+
+  trash="$HOME/.Trash"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$trash"
+  for p in "${list[@]}"; do
+    if mv "$CHROME_DIR/$p" "$trash/Chrome $p $stamp"; then
+      say "$p: moved to the Trash"
+      moved=$((moved + 1))
+    else
+      say "$p: couldn't be moved"
+    fi
+  done
+  say ""
+  say "Deleted $moved profile(s). Empty the Trash to free the space."
+  say "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
+  say "that card and choose Delete."
+  say "If you're removing everything, choose option 7 next to remove the policy."
 }
 
 # ---------------------------------------------------------------- tiling
@@ -432,7 +549,30 @@ place_new_window() {
   return 1
 }
 
+# Waits $1 seconds, counting down on a single line
+countdown() {
+  local s
+  for ((s = $1; s > 0; s--)); do
+    printf '\r    next window in %3ds ' "$s"
+    sleep 1
+  done
+  printf '\r    next window in   0s\n'
+}
+
 launch_tiled() {
+  local dmin=$DELAY_MIN dmax=$DELAY_MAX
+  if [ "$1" = "fast" ]; then dmin=1; dmax=1; fi
+
+  local p missing=()
+  for p in "${PROFILES[@]}"; do
+    [ -d "$CHROME_DIR/$p" ] || missing+=("$p")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    say "These profiles don't exist yet: ${missing[*]}"
+    say "Run step 3 first; it creates them and copies the master profile into them."
+    return 1
+  fi
+
   detect_screens
   if [ ${#SCREENS[@]} -eq 0 ]; then
     say "Couldn't read your screen sizes. Windows will open untiled."
@@ -443,8 +583,12 @@ launch_tiled() {
   # keep the Mac awake until this script finishes
   caffeinate -i -w $$ >/dev/null 2>&1 &
 
-  say "Opening $total profiles with a ${DELAY_MIN}-${DELAY_MAX}s pause between each."
-  local i=0 p before left top right bottom delay
+  if [ "$dmin" -eq "$dmax" ]; then
+    say "Opening $total profiles with a ${dmin}s pause between each."
+  else
+    say "Opening $total profiles with a ${dmin}-${dmax}s pause between each."
+  fi
+  local i=0 before left top right bottom delay
   local args
   for p in "${PROFILES[@]}"; do
     i=$((i + 1))
@@ -458,31 +602,87 @@ launch_tiled() {
       place_new_window "$before" "$left" "$top" "$right" "$bottom"
     fi
     [ "$i" -eq "$total" ] && break
-    delay=$((DELAY_MIN + RANDOM % (DELAY_MAX - DELAY_MIN + 1)))
-    say "    waiting ${delay}s..."
-    sleep "$delay"
+    delay=$((dmin + RANDOM % (dmax - dmin + 1)))
+    countdown "$delay"
   done
   say "Done."
 }
 
 # ---------------------------------------------------------------- menu
 
+show_banner() {
+  cat <<'EOF'
+
+                         .
+                        /|\
+                       / | \
+                      /  |  \
+                     /   |   \
+                    /____|____\
+                   /  _______  \
+                  /  |       |  \
+                 /___|_______|___\
+      \o/  o   \o/  o/  \o/  \o   o  \o/
+       |  /|\   |   |    |    |  /|\  |
+EOF
+  say "  =============================================="
+  say "         Stagehand  -  $EXTENSION_NAME"
+  say "  =============================================="
+}
+
+# Sets DONE_1, DONE_2, DONE_3 to 1 for each setup step that looks finished
+check_progress() {
+  local m="$CHROME_DIR/$MASTER_PROFILE" d p
+  DONE_1=0; DONE_2=0; DONE_3=1
+  # the extension only installs itself once the policy is in place
+  if [ -d "$m/Extensions/$EXTENSION_ID" ] || [ -d "$CHROME_DIR/${PROFILES[0]}/Extensions/$EXTENSION_ID" ]; then
+    DONE_1=1
+  fi
+  d="$m/Local Extension Settings/$EXTENSION_ID"
+  [ -d "$d" ] && [ "$(dir_kb "$d")" -ge 8 ] && DONE_2=1
+  for p in "${PROFILES[@]}"; do
+    d="$CHROME_DIR/$p/Local Extension Settings/$EXTENSION_ID"
+    if [ ! -d "$d" ] || [ "$(dir_kb "$d")" -lt 8 ]; then DONE_3=0; break; fi
+  done
+}
+
+# $1 = step number, $2 = 1 if done, $3 = label. The first unfinished step is marked as next.
+setup_line() {
+  local box="[ ]" next=""
+  if [ "$2" -eq 1 ]; then
+    box="[x]"
+  elif [ -z "$NEXT_SHOWN" ]; then
+    next="   <- next"
+    NEXT_SHOWN=1
+  fi
+  say "  $box $1) $3$next"
+}
+
 show_menu() {
   clear
-  say "=============================================="
-  say "  Chrome Profile Tiler"
-  say "=============================================="
-  say "  Extension : $EXTENSION_ID"
-  say "  Profiles  : Profile 1 - Profile $PROFILE_COUNT   (primary: $SOURCE_PROFILE)"
+  show_banner
+  check_progress
+  NEXT_SHOWN=""
   say ""
-  say "  1) First-time setup (install policy, create profiles, install extension)"
-  say "  2) Open primary profile (to configure the extension)"
-  say "  3) Copy primary settings to the other profiles"
-  say "  4) Launch all profiles, tiled across your screens"
-  say "  5) Check status"
-  say "  6) Remove the policy (undo step 1)"
-  say "  Q) Quit"
+  say "  Get set up (once)"
+  setup_line 1 "$DONE_1" "Let Chrome install $EXTENSION_NAME for you"
+  setup_line 2 "$DONE_2" "Set up $EXTENSION_NAME in the master profile"
+  setup_line 3 "$DONE_3" "Copy the master into Profile 1 - Profile $PROFILE_COUNT"
   say ""
+  say "  On the day"
+  say "      4) Launch all the profiles"
+  say "      5) Test launch (1-second pause instead of ${DELAY_MIN}-${DELAY_MAX})"
+  say ""
+  say "  More"
+  say "      6) Check status"
+  say "      7) Remove the policy (also removes the extension)"
+  say "      8) Delete the profiles"
+  say "      Q) Quit"
+  say ""
+  if [ -z "$NEXT_SHOWN" ]; then
+    say "  All set. Choose 5 to check the copies, or 4 when it's time."
+    say ""
+  fi
 }
 
 main() {
@@ -500,14 +700,16 @@ main() {
     read -r -p "Choose an option: " choice
     say ""
     case "$choice" in
-      1) first_time_setup ;;
-      2) open_primary ;;
-      3) copy_settings ;;
+      1) one_time_setup ;;
+      2) open_master ;;
+      3) copy_master ;;
       4) launch_tiled ;;
-      5) show_status ;;
-      6) remove_policy ;;
+      5) launch_tiled fast ;;
+      6) show_status ;;
+      7) if confirm_policy_removal; then remove_policy; else say "Cancelled."; fi ;;
+      8) delete_profiles ;;
       q|Q) exit 0 ;;
-      *) say "Please choose 1-6 or Q." ;;
+      *) say "Please choose 1-8 or Q." ;;
     esac
     say ""
     pause

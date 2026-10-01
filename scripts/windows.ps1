@@ -1,4 +1,4 @@
-# Chrome Profile Tiler - Windows
+# Stagehand - Windows
 # Keep this file ASCII-only: Windows PowerShell 5.1 misreads non-ASCII
 # characters in scripts that were saved without a byte-order mark.
 
@@ -70,12 +70,9 @@ function Test-Admin {
 
 function Read-Settings {
   $cfg = @{
-    EXTENSION_ID     = "nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
     STARTUP_URL      = ""
     SET_STARTUP_PAGE = "yes"
     PROFILE_COUNT    = "12"
-    SOURCE_PROFILE   = "Profile 1"
-    COPY_TO          = "ALL"
     DELAY_MIN        = "45"
     DELAY_MAX        = "75"
     INSTALL_TIMEOUT  = "90"
@@ -98,14 +95,8 @@ function Read-Settings {
   }
 
   $problems = @()
-  if ($cfg["EXTENSION_ID"] -notmatch '^[a-p]{32}$') {
-    $problems += "EXTENSION_ID should be 32 letters (a-p). Copy it from the Chrome Web Store URL."
-  }
   foreach ($k in "PROFILE_COUNT", "DELAY_MIN", "DELAY_MAX", "INSTALL_TIMEOUT", "MAX_SCREENS") {
     if ($cfg[$k] -notmatch '^\d+$') { $problems += "$k must be a whole number." }
-  }
-  if ($cfg["SOURCE_PROFILE"] -notmatch '^(Default|Profile \d+)$') {
-    $problems += "SOURCE_PROFILE should look like 'Profile 2' or 'Default'."
   }
   if ($problems.Count -eq 0) {
     if ([int]$cfg["PROFILE_COUNT"] -lt 1) { $problems += "PROFILE_COUNT must be at least 1." }
@@ -116,12 +107,15 @@ function Read-Settings {
     return $false
   }
 
-  $script:ExtId          = $cfg["EXTENSION_ID"]
+  # Lightning Autofill is the only extension this tool manages
+  $script:ExtId          = "nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
+  $script:ExtName        = "Lightning Autofill"
+  # The master profile: a dedicated Chrome profile where the extension is set up by hand.
+  # Its settings get copied into Profile 1 ... Profile N.
+  $script:MasterProfile  = "Autofill Master"
   $script:StartupUrl     = $cfg["STARTUP_URL"]
   $script:SetStartup     = ($cfg["SET_STARTUP_PAGE"] -eq "yes")
   $script:ProfileCount   = [int]$cfg["PROFILE_COUNT"]
-  $script:Source         = $cfg["SOURCE_PROFILE"]
-  $script:CopyTo         = $cfg["COPY_TO"]
   $script:DelayMin       = [int]$cfg["DELAY_MIN"]
   $script:DelayMax       = [int]$cfg["DELAY_MAX"]
   $script:InstallTimeout = [int]$cfg["INSTALL_TIMEOUT"]
@@ -218,82 +212,90 @@ function Remove-Policy {
 
 # ---------------------------------------------------------------- profiles
 
-function New-ChromeProfiles {
-  if (-not (Confirm-ChromeClosed)) { return $false }
-  Write-Host "Opening each profile once so Chrome installs the extension."
-  Write-Host "(Profiles that don't exist yet are created.)"
-  $total = $Profiles.Count
-  $i = 0
-  $missing = 0
-  foreach ($p in $Profiles) {
-    $i++
-    $extDir = Join-Path $UserData "$p\Extensions\$ExtId"
-    Write-Host "[$(Get-Date -Format HH:mm:ss)] ($i/$total) $p"
+# Opens one profile just long enough for the policy to install the extension in it.
+# Returns $true if the extension is there afterwards, $false if it never appeared.
+function Install-ExtensionIn($p) {
+  $extDir = Join-Path $UserData "$p\Extensions\$ExtId"
+  if (-not (Test-Path $extDir)) {
     Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$p`"", "about:blank")
     $waited = 0
     while (-not (Test-Path $extDir) -and $waited -lt $InstallTimeout) {
       Start-Sleep -Seconds 2
       $waited += 2
     }
-    if (Test-Path $extDir) {
-      Start-Sleep -Seconds 4
-      Write-Host "    extension installed"
-    } else {
-      Write-Host "    WARNING: the extension didn't appear within ${InstallTimeout}s." -ForegroundColor Yellow
-      $missing++
-    }
+    if (Test-Path $extDir) { Start-Sleep -Seconds 4 }
     Stop-Chrome
   }
-  if ($missing -gt 0) {
-    Write-Host ""
-    Write-Host "$missing profile(s) did not get the extension. Check that the policy is installed"
-    Write-Host "(open chrome://policy in Chrome), then run this step again."
-    return $false
-  }
-  return $true
+  return (Test-Path $extDir)
 }
 
-function Open-PrimaryProfile {
-  Write-Host "Opening $Source."
-  Write-Host "Set up the extension there (its options/settings page), then close Chrome"
-  Write-Host "completely and choose 'Copy primary settings' from the menu."
-  Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$Source`"", "chrome://extensions")
+function Open-MasterProfile {
+  Write-Host "Opening the master profile."
+  Write-Host "This is a separate Chrome profile just for setting up $ExtName by hand."
+  Write-Host "The first time, it can take up to a minute for the extension to appear."
+  Write-Host ""
+  Write-Host "When Chrome opens:"
+  Write-Host "  - If it asks you to sign in or turn on sync, choose 'Don't sign in'."
+  Write-Host "  - Follow your Autofill instructions to set up $ExtName."
+  Write-Host "  - When you've finished and clicked Save, close Chrome completely."
+  Write-Host "Then come back here and choose step 3."
+  Start-Process $ChromeExe -ArgumentList @("--profile-directory=`"$MasterProfile`"", "--new-window")
 }
 
-function Get-CopyTargets {
-  if ($CopyTo -eq "" -or $CopyTo -eq "ALL") {
-    return @($Profiles | Where-Object { $_ -ne $Source })
-  }
-  return @($CopyTo.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -ne $Source })
-}
 
-function Copy-Settings {
-  $src = Join-Path $UserData $Source
-  if (-not (Test-Path (Join-Path $src "Local Extension Settings\$ExtId"))) {
-    Write-Host "$Source has no saved settings for this extension yet."
-    Write-Host "Choose 'Open primary profile' from the menu, set the extension up, close Chrome, then try again."
+function Copy-Master {
+  $src = Join-Path $UserData $MasterProfile
+  $srcLocal = Join-Path $src "Local Extension Settings\$ExtId"
+  if (-not (Test-Path $srcLocal)) {
+    Write-Host "The master profile has no $ExtName settings yet."
+    Write-Host "Choose step 2, set up $ExtName there and click Save, close Chrome,"
+    Write-Host "then come back to step 3."
     return
   }
-
-  $targets = @(Get-CopyTargets)
-  if ($targets.Count -eq 0) {
-    Write-Host "There are no other profiles to copy to (check COPY_TO in config.txt)."
-    return
+  $bytes = (Get-ChildItem $srcLocal -Recurse -File | Measure-Object Length -Sum).Sum
+  $kb = [math]::Round($bytes / 1KB, 0)
+  if ($kb -lt 8) {
+    Write-Host "The master profile's $ExtName looks almost empty ($kb KB of settings)."
+    Write-Host "Did you activate it, import the rules and click Save? A set-up profile is usually much bigger."
+    if (-not (Read-YesNo "Copy it anyway?")) { Write-Host "Cancelled."; return }
   }
-  Write-Host "This will REPLACE the extension's saved settings in these profiles"
-  Write-Host "with the settings from ${Source}:"
-  foreach ($t in $targets) { Write-Host "  - $t" }
-  Write-Host "(Whatever is there now is backed up first.)"
+
+  Write-Host "This copies the master profile's $ExtName settings (key, rules and options) into"
+  Write-Host "Profile 1 - Profile $ProfileCount, creating any of those profiles that don't exist yet."
+  Write-Host "Anything $ExtName has stored in them is replaced (it's backed up first)."
   if (-not (Read-YesNo "Continue?")) { Write-Host "Cancelled."; return }
   if (-not (Confirm-ChromeClosed)) { return }
 
+  # 1. make sure every profile exists and has the extension installed
+  $total = $Profiles.Count
+  $i = 0
+  $tried = 0
+  foreach ($p in $Profiles) {
+    $i++
+    if (Test-Path (Join-Path $UserData "$p\Extensions\$ExtId")) { continue }
+    $tried++
+    Write-Host "[$(Get-Date -Format HH:mm:ss)] ($i/$total) ${p}: creating it and installing the extension..."
+    if (Install-ExtensionIn $p) {
+      Write-Host "    done"
+    } else {
+      Write-Host "    WARNING: the extension didn't appear within ${InstallTimeout}s." -ForegroundColor Yellow
+      if ($tried -eq 1) {
+        Write-Host ""
+        Write-Host "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
+        Write-Host "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        return
+      }
+    }
+  }
+
+  # 2. copy the master's settings into each profile
   $areas  = @("Local Extension Settings", "Sync Extension Settings")
   $backup = Join-Path $RepoDir ("generated\backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
   $copied = 0
-  foreach ($p in $targets) {
+  foreach ($p in $Profiles) {
     $profileDir = Join-Path $UserData $p
-    if (-not (Test-Path $profileDir)) {
-      Write-Host "${p}: profile folder doesn't exist yet (run first-time setup) - skipped"
+    if (-not (Test-Path (Join-Path $profileDir "Extensions\$ExtId"))) {
+      Write-Host "${p}: skipped (the extension isn't installed there)"
       continue
     }
     foreach ($a in $areas) {
@@ -313,24 +315,28 @@ function Copy-Settings {
     Write-Host "${p}: copied"
     $copied++
   }
+
   Write-Host ""
-  Write-Host "Copied settings from $Source to $copied profile(s)."
-  if (Test-Path $backup) { Write-Host "Previous settings were backed up to: $backup" }
-  Write-Host "If a profile is signed in to a Google account with Chrome sync on, Chrome may"
-  Write-Host "overwrite the copy. Use the extension's own Export/Import for those."
+  Write-Host "Copied the master profile to $copied of $total profiles."
+  if (Test-Path $backup) { Write-Host "What was there before is backed up in: $backup" }
+  Write-Host ""
+  Write-Host "Next, check one copy: open it (step 4 or 5), then in $ExtName's Options look for"
+  Write-Host "'Activated' on the Settings tab and your rules on the Form Fields tab."
 }
 
 function Show-Status {
   Write-Host "Chrome data folder: $UserData"
-  Write-Host "Extension: $ExtId"
+  Write-Host "Extension: $ExtName ($ExtId)"
   if (Test-PolicyInstalled) { Write-Host "Policy: installed" } else { Write-Host "Policy: NOT installed" }
   Write-Host ""
-  Write-Host ("{0,-12} {1,-11} {2}" -f "PROFILE", "EXTENSION", "SAVED SETTINGS")
-  $list = @($Source) + @($Profiles | Where-Object { $_ -ne $Source })
+  Write-Host ("{0,-18} {1,-11} {2}" -f "PROFILE", "EXTENSION", "SAVED SETTINGS")
+  $list = @($MasterProfile) + @($Profiles)
   foreach ($p in $list) {
+    $note = ""
+    if ($p -eq $MasterProfile) { $note = "   <- master" }
     $dir = Join-Path $UserData $p
     if (-not (Test-Path $dir)) {
-      Write-Host ("{0,-12} {1}" -f $p, "(profile not created yet)")
+      Write-Host ("{0,-18} {1}{2}" -f $p, "(not created yet)", $note)
       continue
     }
     $inst = "no"
@@ -339,28 +345,132 @@ function Show-Status {
     $size = "none"
     if (Test-Path $sd) {
       $bytes = (Get-ChildItem $sd -Recurse -File | Measure-Object Length -Sum).Sum
-      $size = "{0} KB" -f [math]::Round($bytes / 1KB, 1)
+      $size = "{0} KB" -f [math]::Round($bytes / 1KB, 0)
     }
-    $note = ""
-    if ($p -eq $Source) { $note = "   <- primary" }
-    Write-Host ("{0,-12} {1,-11} {2}{3}" -f $p, $inst, $size, $note)
+    Write-Host ("{0,-18} {1,-11} {2}{3}" -f $p, $inst, $size, $note)
   }
   Write-Host ""
-  Write-Host "Tip: a configured profile usually has a much larger 'saved settings' size than a fresh one."
+  Write-Host "A profile that has been set up usually shows a much bigger 'saved settings' size than a"
+  Write-Host "fresh one. After step 3, every copy should be close to the master's size."
 }
 
-function Start-FirstTimeSetup {
+function Start-OneTimeSetup {
   Install-Policy
   if (-not (Test-PolicyInstalled)) {
     Write-Host "The policy isn't installed, so I'm stopping here." -ForegroundColor Yellow
     return
   }
-  if (-not (New-ChromeProfiles)) { return }
   Write-Host ""
-  Write-Host "First-time setup finished. Next:"
-  Write-Host "  2) Open primary profile - configure the extension there"
-  Write-Host "  3) Copy primary settings to the other profiles"
-  Write-Host "  4) Launch all profiles, tiled"
+  Write-Host "One-time setup finished. Next, choose step 2 to open the master profile."
+}
+
+# ---------------------------------------------------------------- uninstall
+
+function Confirm-PolicyRemoval {
+  Write-Host "Heads up: removing the policy also removes $ExtName."
+  Write-Host "Chrome treats the extension as managed by the policy, so it will uninstall it from"
+  Write-Host "EVERY profile the next time Chrome starts, along with the extension's saved settings."
+  Write-Host "The startup page set by the policy goes away too."
+  Write-Host ""
+  Write-Host "Only continue if you're finished with the extension, or you plan to install it"
+  Write-Host "yourself from the Chrome Web Store afterwards (it will start empty)."
+  Write-Host ""
+  return (Read-YesNo "Remove the policy anyway?")
+}
+
+# Removes profile folders from Chrome's profile list (the "Local State" file).
+# Chrome must be closed. Keeps a backup copy and puts it back if anything goes wrong.
+function Update-LocalState($names) {
+  $ls = Join-Path $UserData "Local State"
+  if (-not (Test-Path $ls)) { return $true }
+  $bkDir = Join-Path $RepoDir "generated"
+  New-Item -ItemType Directory -Path $bkDir -Force | Out-Null
+  $bk = Join-Path $bkDir ("Local State.backup-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+  try {
+    Copy-Item $ls $bk -Force -ErrorAction Stop
+    $raw  = [System.IO.File]::ReadAllText($ls)
+    $obj  = $raw | ConvertFrom-Json
+    $prof = $obj.profile
+    if ($prof) {
+      if ($prof.info_cache) {
+        foreach ($n in $names) { [void]$prof.info_cache.PSObject.Properties.Remove($n) }
+      }
+      foreach ($k in @("profiles_order", "last_active_profiles")) {
+        if ($prof.PSObject.Properties[$k]) {
+          $prof.$k = @($prof.$k | Where-Object { $names -notcontains $_ })
+        }
+      }
+      if ($prof.PSObject.Properties["last_used"] -and ($names -contains $prof.last_used)) {
+        $prof.last_used = "Default"
+      }
+    }
+    $json = $obj | ConvertTo-Json -Depth 100 -Compress
+    [void]($json | ConvertFrom-Json)   # must parse again before anything is overwritten
+    [System.IO.File]::WriteAllText($ls, $json, (New-Object System.Text.UTF8Encoding($false)))
+    return $true
+  } catch {
+    if (Test-Path $bk) { Copy-Item $bk $ls -Force -ErrorAction SilentlyContinue }
+    return $false
+  }
+}
+
+function Remove-ChromeProfiles {
+  $existing = @($Profiles | Where-Object { $_ -ne "Default" -and (Test-Path (Join-Path $UserData $_)) })
+  if ($existing.Count -eq 0 -and -not (Test-Path (Join-Path $UserData $MasterProfile))) {
+    Write-Host "None of the profiles exist, so there's nothing to delete."
+    return
+  }
+
+  $list = @($existing)
+  if (Test-Path (Join-Path $UserData $MasterProfile)) {
+    Write-Host "Your master profile ($MasterProfile) is where $ExtName is set up by hand."
+    Write-Host "Keeping it means you can copy it into new profiles again later."
+    if (Read-YesNo "Delete the master profile too?") { $list += $MasterProfile }
+  }
+  if ($list.Count -eq 0) { Write-Host "Nothing left to delete."; return }
+
+  Write-Host ""
+  Write-Host "These profiles will be DELETED:"
+  foreach ($p in $list) { Write-Host "  - $p" }
+  Write-Host ""
+  Write-Host "Everything in them goes: browsing history, bookmarks, saved passwords, cookies and"
+  Write-Host "any accounts signed in there. Your Default profile is never touched."
+  Write-Host "They are sent to the Recycle Bin where Windows allows it (a very large profile may"
+  Write-Host "be deleted permanently instead)."
+  Write-Host ""
+  $typed = Read-Host "Type DELETE (in capitals) to continue"
+  if ($typed -cne "DELETE") { Write-Host "Cancelled."; return }
+
+  if (-not (Confirm-ChromeClosed)) { return }
+
+  if (-not (Update-LocalState $list)) {
+    Write-Host "I couldn't tidy Chrome's list of profiles (nothing was changed there)."
+    if (-not (Read-YesNo "Delete the folders anyway? Chrome may then show empty leftover entries.")) {
+      Write-Host "Cancelled."
+      return
+    }
+  }
+
+  Add-Type -AssemblyName Microsoft.VisualBasic
+  $moved = 0
+  foreach ($p in $list) {
+    $dir = Join-Path $UserData $p
+    try {
+      [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(
+        $dir,
+        [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+        [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)
+      Write-Host "${p}: deleted"
+      $moved++
+    } catch {
+      Write-Host "${p}: couldn't be deleted ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
+  }
+  Write-Host ""
+  Write-Host "Deleted $moved profile(s). Empty the Recycle Bin to free the space."
+  Write-Host "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
+  Write-Host "that card and choose Delete."
+  Write-Host "If you're removing everything, choose option 7 next to remove the policy."
 }
 
 # ---------------------------------------------------------------- tiling
@@ -418,7 +528,18 @@ function Move-NewChromeWindow($before, $x, $y, $w, $h) {
   Write-Host "    warning: couldn't find the new window to position" -ForegroundColor Yellow
 }
 
-function Start-TiledLaunch {
+function Start-TiledLaunch([bool]$Fast = $false) {
+  $dMin = $DelayMin
+  $dMax = $DelayMax
+  if ($Fast) { $dMin = 1; $dMax = 1 }
+
+  $missing = @($Profiles | Where-Object { -not (Test-Path (Join-Path $UserData $_)) })
+  if ($missing.Count -gt 0) {
+    Write-Host "These profiles don't exist yet: $($missing -join ', ')"
+    Write-Host "Run step 3 first; it creates them and copies the master profile into them."
+    return
+  }
+
   Initialize-WinApi
 
   # primary screen first, then the others left to right
@@ -448,7 +569,11 @@ function Start-TiledLaunch {
     }
   }
 
-  Write-Host "Opening $n profiles with a $DelayMin-$DelayMax second pause between each."
+  if ($dMin -eq $dMax) {
+    Write-Host "Opening $n profiles with a $dMin second pause between each."
+  } else {
+    Write-Host "Opening $n profiles with a $dMin-$dMax second pause between each."
+  }
   $i = 0
   foreach ($p in $Profiles) {
     $slot = $slots[$i]
@@ -461,9 +586,12 @@ function Start-TiledLaunch {
     Move-NewChromeWindow $before $slot[0] $slot[1] $slot[2] $slot[3]
 
     if ($i -eq $n) { break }
-    $delay = Get-Random -Minimum $DelayMin -Maximum ($DelayMax + 1)
-    Write-Host "    waiting ${delay}s..."
-    Start-Sleep -Seconds $delay
+    $delay = Get-Random -Minimum $dMin -Maximum ($dMax + 1)
+    for ($s = $delay; $s -gt 0; $s--) {
+      Write-Host -NoNewline ("`r    next window in {0,3}s " -f $s)
+      Start-Sleep -Seconds 1
+    }
+    Write-Host "`r    next window in   0s"
   }
   Write-Host "Done."
 }
@@ -472,45 +600,110 @@ function Start-TiledLaunch {
 
 function Invoke-Action($name) {
   switch ($name) {
-    "setup"          { Start-FirstTimeSetup }
-    "policy-install" { Install-Policy }
-    "policy-remove"  { Remove-Policy }
-    "open-primary"   { Open-PrimaryProfile }
-    "copy"           { Copy-Settings }
-    "launch"         { Start-TiledLaunch }
-    "status"         { Show-Status }
-    default          { Write-Host "Unknown action: $name" }
+    "setup"           { Start-OneTimeSetup }
+    "policy-install"  { Install-Policy }
+    "policy-remove"   { Remove-Policy }
+    "open-master"     { Open-MasterProfile }
+    "copy"            { Copy-Master }
+    "launch"          { Start-TiledLaunch $false }
+    "test-launch"     { Start-TiledLaunch $true }
+    "status"          { Show-Status }
+    "delete-profiles" { Remove-ChromeProfiles }
+    default           { Write-Host "Unknown action: $name" }
   }
+}
+
+function Show-Banner {
+  Write-Host @'
+
+                         .
+                        /|\
+                       / | \
+                      /  |  \
+                     /   |   \
+                    /____|____\
+                   /  _______  \
+                  /  |       |  \
+                 /___|_______|___\
+      \o/  o   \o/  o/  \o/  \o   o  \o/
+       |  /|\   |   |    |    |  /|\  |
+'@
+  Write-Host "  =============================================="
+  Write-Host "         Stagehand  -  $ExtName"
+  Write-Host "  =============================================="
+}
+
+function Get-SettingsKB($dir) {
+  if (-not (Test-Path $dir)) { return -1 }
+  $bytes = (Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum
+  return [math]::Round($bytes / 1KB, 0)
+}
+
+# Which setup steps look finished: an array of three booleans
+function Get-Progress {
+  $master = Join-Path $UserData $MasterProfile
+  $policy = (Test-PolicyInstalled)
+  $setUp  = ((Get-SettingsKB (Join-Path $master "Local Extension Settings\$ExtId")) -ge 8)
+  $copied = $true
+  foreach ($p in $Profiles) {
+    if ((Get-SettingsKB (Join-Path $UserData "$p\Local Extension Settings\$ExtId")) -lt 8) { $copied = $false; break }
+  }
+  return @($policy, $setUp, $copied)
 }
 
 function Show-Menu {
   while ($true) {
     Clear-Host
-    Write-Host "=============================================="
-    Write-Host "  Chrome Profile Tiler"
-    Write-Host "=============================================="
-    Write-Host "  Extension : $ExtId"
-    Write-Host "  Profiles  : Profile 1 - Profile $ProfileCount   (primary: $Source)"
+    Show-Banner
+    $done   = Get-Progress
+    $labels = @(
+      "Let Chrome install $ExtName for you",
+      "Set up $ExtName in the master profile",
+      "Copy the master into Profile 1 - Profile $ProfileCount"
+    )
+    $nextShown = $false
     Write-Host ""
-    Write-Host "  1) First-time setup (install policy, create profiles, install extension)"
-    Write-Host "  2) Open primary profile (to configure the extension)"
-    Write-Host "  3) Copy primary settings to the other profiles"
-    Write-Host "  4) Launch all profiles, tiled across your screens"
-    Write-Host "  5) Check status"
-    Write-Host "  6) Remove the policy (undo step 1)"
-    Write-Host "  Q) Quit"
+    Write-Host "  Get set up (once)"
+    for ($s = 0; $s -lt 3; $s++) {
+      if ($done[$s]) {
+        Write-Host "  [x] $($s + 1)) $($labels[$s])"
+      } elseif (-not $nextShown) {
+        Write-Host "  [ ] $($s + 1)) $($labels[$s])   <- next" -ForegroundColor Yellow
+        $nextShown = $true
+      } else {
+        Write-Host "  [ ] $($s + 1)) $($labels[$s])"
+      }
+    }
     Write-Host ""
+    Write-Host "  On the day"
+    Write-Host "      4) Launch all the profiles"
+    Write-Host "      5) Test launch (1-second pause instead of $DelayMin-$DelayMax)"
+    Write-Host ""
+    Write-Host "  More"
+    Write-Host "      6) Check status"
+    Write-Host "      7) Remove the policy (also removes the extension)"
+    Write-Host "      8) Delete the profiles"
+    Write-Host "      Q) Quit"
+    Write-Host ""
+    if (-not $nextShown) {
+      Write-Host "  All set. Choose 5 to check the copies, or 4 when it's time." -ForegroundColor Green
+      Write-Host ""
+    }
     $choice = (Read-Host "Choose an option").Trim().ToUpper()
     Write-Host ""
     switch ($choice) {
       "1" { Invoke-Action "setup" }
-      "2" { Invoke-Action "open-primary" }
+      "2" { Invoke-Action "open-master" }
       "3" { Invoke-Action "copy" }
       "4" { Invoke-Action "launch" }
-      "5" { Invoke-Action "status" }
-      "6" { Invoke-Action "policy-remove" }
+      "5" { Invoke-Action "test-launch" }
+      "6" { Invoke-Action "status" }
+      "7" {
+        if (Confirm-PolicyRemoval) { Invoke-Action "policy-remove" } else { Write-Host "Cancelled." }
+      }
+      "8" { Invoke-Action "delete-profiles" }
       "Q" { return }
-      default { Write-Host "Please choose 1-6 or Q." }
+      default { Write-Host "Please choose 1-8 or Q." }
     }
     Write-Host ""
     Read-Host "Press Enter to return to the menu" | Out-Null

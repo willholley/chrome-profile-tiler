@@ -1,38 +1,23 @@
-# Chrome Profile Tiler - settings
+# Stagehand - settings
 #
 # Lines starting with # are ignored. Write values exactly as shown:
-# no quotes, one setting per line. Save the file, then run the launcher.
+# no quotes, one setting per line. Save the file, then run the tool.
 
-# The extension to install in every profile. This is the long ID at the end of
-# its Chrome Web Store URL. (Default: Lightning Autofill.)
-EXTENSION_ID=nlmmgnhgdeffjkdckmikfpnddkbbfkkk
-
-# The page to open in every profile.
+# The page to open in every profile when you launch them.
 STARTUP_URL=https://glastonbury.seetickets.com
 
-# yes = also make this page Chrome's startup page in every profile (via policy).
-# no  = only force-install the extension.
-SET_STARTUP_PAGE=yes
-
-# How many profiles to manage: Profile 1 ... Profile N.
+# How many profiles to make and launch: Profile 1 ... Profile N.
 PROFILE_COUNT=12
 
-# Your "primary" profile: the one where the extension is already configured.
-# Its settings get copied to the others. Use the folder name shown by the
-# "Check status" menu option (for example Profile 2, or Default).
-SOURCE_PROFILE=Profile 2
-
-# Which profiles receive the copied settings.
-# ALL = every managed profile except the primary.
-# Or list some, e.g.:  COPY_TO=Profile 1, Profile 8, Profile 9
-COPY_TO=ALL
-
-# Random pause (seconds) between opening one profile and the next.
+# Random pause (in seconds) between opening one profile and the next.
+# The menu also has a "Test launch" option that uses a 1-second pause.
 DELAY_MIN=45
 DELAY_MAX=75
 
-# How long (seconds) to wait for the extension to install in each profile.
-INSTALL_TIMEOUT=90
-
-# How many screens to tile across. 0 = all screens.
-MAX_SCREENS=0
+# ---- Advanced (optional): remove the # at the start of a line to use it ----
+# Also make STARTUP_URL Chrome's startup page in every profile: yes or no
+#SET_STARTUP_PAGE=yes
+# Seconds to wait for the extension to install in each new profile
+#INSTALL_TIMEOUT=90
+# How many screens to tile across (0 = all)
+#MAX_SCREENS=0
