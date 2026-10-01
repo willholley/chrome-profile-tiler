@@ -43,12 +43,6 @@ main() {
     fail "This installer is for macOS. On Windows, see the README for the Windows steps."
   fi
 
-  if [ -z "$CPT_ZIP_URL" ]; then
-    case "$REPO" in
-      *willholley*) fail "install.sh still says willholley. Edit the REPO line (or set CPT_REPO) first." ;;
-    esac
-  fi
-
   case "$DEST" in
     ""|"/"|"$HOME"|"$HOME/") fail "Refusing to install into '$DEST'." ;;
   esac
