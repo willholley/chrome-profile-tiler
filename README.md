@@ -14,16 +14,77 @@ Works on **Windows** and **macOS**. No installs needed beyond Google Chrome.
 
 ---
 
-## Quick start
+## Quick start: Mac
 
-### 1. Get the files
+You need Terminal for this, but you only have to paste one line.
 
-- **Easiest:** click the green **Code** button on GitHub, choose **Download ZIP**, and unzip it somewhere you'll remember (your Desktop is fine).
-- Or, if you use git: `git clone <this repo's URL>`
+**1. Open Terminal.** Press **Cmd + Space**, type **Terminal**, press **Enter**.
 
-### 2. Edit `config.txt`
+**2. Paste this line and press Enter:**
 
-Open it in Notepad / TextEdit. The important lines:
+```
+curl -fsSL https://raw.githubusercontent.com/willholley/chrome-profile-tiler/main/install.sh | bash
+```
+
+**3. Answer the prompts.** The installer downloads the project into a `chrome-profile-tiler` folder in your home folder, offers to open `config.txt` so you can check the settings, then offers to start the menu. Say yes to both the first time, then follow [Using the menu](#using-the-menu).
+
+**Next time**, run the same line again. It updates to the latest version, **keeps your `config.txt`**, and offers to start the menu. Or skip the update and go straight to the menu:
+
+```
+bash ~/chrome-profile-tiler/scripts/macos.sh
+```
+
+To edit your settings later:
+
+```
+open -e ~/chrome-profile-tiler/config.txt
+```
+
+Because the files are downloaded by `curl` rather than a browser, macOS doesn't block them, so there's no "unidentified developer" warning to get past.
+
+**Want to read the installer before running it?** Paste this instead. It shows the script without running it (press **q** to leave):
+
+```
+curl -fsSL https://raw.githubusercontent.com/willholley/chrome-profile-tiler/main/install.sh | less
+```
+
+### New to Terminal?
+
+- **To run a command:** copy it, click in the Terminal window, press **Cmd + V** to paste, then press **Enter**.
+- **Typing your password shows nothing.** When a command asks for a password, the screen stays blank as you type. That's normal. Type it and press Enter.
+- **Nothing happens after you press Enter?** Some commands take a few seconds. When a new line appears ending in `%` or `$`, it has finished.
+- **To stop a running script,** press **Control + C**.
+- **The first time it moves windows,** macOS asks whether Terminal can control Google Chrome. Click **OK**.
+
+### Mac without the one-liner
+
+If you'd rather not run an installer from the internet, download the ZIP from GitHub (green **Code** button > **Download ZIP**) and unzip it. In Terminal type `cd ` (with a space after it), **drag the unzipped folder into the Terminal window**, press **Enter**, then paste these two lines one at a time:
+
+```
+xattr -dr com.apple.quarantine .
+```
+
+```
+bash scripts/macos.sh
+```
+
+Edit `config.txt` with TextEdit first (right-click > Open With > TextEdit).
+
+---
+
+## Quick start: Windows
+
+1. On GitHub, click the green **Code** button, choose **Download ZIP**, and unzip it somewhere you'll remember (your Desktop is fine). To avoid a security warning, right-click the ZIP first, choose **Properties**, tick **Unblock**, then unzip.
+2. Open **`config.txt`** in Notepad and check the settings (see [Settings](#settings-configtxt)).
+3. Double-click **`Start (Windows).bat`**.
+4. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
+5. Follow [Using the menu](#using-the-menu).
+
+---
+
+## Settings (`config.txt`)
+
+The important lines:
 
 | Setting | What it does |
 |---|---|
@@ -32,14 +93,11 @@ Open it in Notepad / TextEdit. The important lines:
 | `PROFILE_COUNT` | How many profiles (Profile 1 to Profile N) |
 | `SOURCE_PROFILE` | Your "primary" profile, where the extension is already configured |
 
-Every setting has a comment explaining it. No quotes needed around values.
+Every setting has a comment explaining it. Write values exactly as shown, with no quotes. Open it in Notepad (Windows) or TextEdit (Mac).
 
-### 3. Run the launcher
+## Using the menu
 
-- **Windows:** double-click **`Start (Windows).bat`**
-- **Mac:** double-click **`Start (Mac).command`**
-
-You'll get a menu:
+Both versions show the same menu:
 
 ```
 1) First-time setup (install policy, create profiles, install extension)
@@ -51,7 +109,7 @@ You'll get a menu:
 Q) Quit
 ```
 
-### 4. Do the steps in order (first time only)
+Type a number and press **Enter**. The first time, go in order:
 
 1. **Option 1.** Installs Chrome's policy, then opens each profile once so the extension installs. Windows shows a permission prompt (UAC). On a Mac you'll approve a settings profile in System Settings; the script walks you through it.
 2. **Option 2.** Opens your primary profile. Configure the extension there the way you want it, then **close Chrome completely**.
@@ -62,14 +120,14 @@ Use **Option 5** any time to see which profiles have the extension and how much 
 
 ---
 
-## If your computer warns you when you open the launcher
+## If your computer warns you
 
-These warnings appear because the files came from the internet and aren't signed. You can read every script in the `scripts/` folder before running anything.
+These warnings appear because the files came from the internet and aren't signed. You can read every script in the `scripts/` folder (and `install.sh`) before running anything.
 
-- **Windows, "Windows protected your PC":** click **More info**, then **Run anyway**. To avoid it, right-click the downloaded ZIP, choose **Properties**, tick **Unblock**, then unzip.
-- **Mac, "cannot be opened because Apple cannot check it":** right-click the `.command` file, choose **Open**, then **Open** again. Or run this once in Terminal from the folder: `xattr -dr com.apple.quarantine .`
-- **Mac, "permission denied":** run `chmod +x "Start (Mac).command" scripts/macos.sh` in Terminal from the folder.
-- **Mac, first launch asks about controlling Chrome:** click **OK**. This is how the windows get positioned (System Settings > Privacy & Security > Automation).
+- **Windows, "Windows protected your PC":** click **More info**, then **Run anyway**.
+- **Mac, "cannot be opened because Apple cannot check it"** (only if you downloaded a ZIP and double-clicked the `.command` file): use the one-line install above instead, or the "Mac without the one-liner" steps. On macOS 15 and later you can also go to System Settings > Privacy & Security and click **Open Anyway**.
+- **Mac, "permission denied":** run `chmod +x "Start (Mac).command" scripts/macos.sh` in Terminal from the project folder, or start it with `bash scripts/macos.sh`, which doesn't need the permission.
+- **Mac, asks about controlling Chrome:** click **OK**. This is how the windows get positioned (System Settings > Privacy & Security > Automation).
 
 ---
 
@@ -77,10 +135,10 @@ These warnings appear because the files came from the internet and aren't signed
 
 Being upfront, because some of this is unusual:
 
+- **The Mac installer downloads this project from GitHub** into `~/chrome-profile-tiler`. That's the only network request the scripts make themselves; Chrome itself downloads the extension.
 - **It sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs the extension and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just yours in the config. Chrome will show "Managed by your organization", and the extension can't be removed from Chrome until you undo the policy (menu option 6).
 - **It copies the extension's saved data** between profile folders inside Chrome's data directory. This isn't an official Chrome feature, so it can fail for some extensions or situations (see below). Existing data is backed up to a `generated/` folder inside this project before being overwritten.
 - **It closes Chrome** (after asking) for the steps that need it. Save your work first.
-- Nothing is sent anywhere. The scripts make no network requests themselves.
 
 ---
 
@@ -103,7 +161,7 @@ Being upfront, because some of this is unusual:
 
 **It only works with Chrome from the Web Store** for the force-install step.
 
-**Undoing everything:** run option 6 to remove the policy, then delete the profiles from Chrome if you no longer want them (profile icon > Settings > delete).
+**Undoing everything:** run option 6 to remove the policy, then delete the profiles from Chrome if you no longer want them (profile icon > Settings > delete). On a Mac you can also delete the `~/chrome-profile-tiler` folder.
 
 ---
 
@@ -111,6 +169,7 @@ Being upfront, because some of this is unusual:
 
 | Step | Windows | macOS |
 |---|---|---|
+| Install | Download the ZIP | `install.sh` downloads the ZIP with `curl` into `~/chrome-profile-tiler` |
 | Force-install extension, set startup page | Registry keys under `HKLM\SOFTWARE\Policies\Google\Chrome` | A `.mobileconfig` settings profile for `com.google.Chrome` |
 | Create profiles | Launches `chrome --profile-directory="Profile N"`, which creates the profile | Same, through `open -na "Google Chrome"` |
 | Copy settings | Copies `Local Extension Settings\<id>` and `Sync Extension Settings\<id>` between profile folders | Same |
@@ -120,8 +179,9 @@ Being upfront, because some of this is unusual:
 Files:
 
 ```
+install.sh              macOS one-line installer (curl | bash)
 Start (Windows).bat     double-click launcher for Windows
-Start (Mac).command     double-click launcher for macOS
+Start (Mac).command     double-click launcher for macOS (the installer is more reliable)
 config.txt              the only file most people need to edit
 scripts/windows.ps1     Windows implementation (PowerShell 5.1+)
 scripts/macos.sh        macOS implementation (bash 3.2+, the version macOS ships)
@@ -130,7 +190,7 @@ generated/              created at run time: backups and the Mac settings profil
 
 ## Contributing
 
-Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShell 5.1 misreads non-ASCII characters in files without a byte-order mark) and compatible with bash 3.2.
+Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShell 5.1 misreads non-ASCII characters in files without a byte-order mark) and compatible with bash 3.2. In `install.sh`, keep all code inside functions with `main "$@"` as the last line, and read prompts from `/dev/tty`, because the script arrives on stdin when piped.
 
 ## Licence
 
