@@ -7,6 +7,15 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${CONFIG_FILE:-$REPO_DIR/config.txt}"
 CHROME_DIR="${CHROME_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
 POLICY_ID="com.local.chrome-profile-tiler"  # kept from the old name so existing installs can still be removed
+OLD_POLICY_IDS="com.local.chrome-policy"     # used by earlier versions; removed along with POLICY_ID
+MANAGED_PREFS_DIR="${MANAGED_PREFS_DIR:-/Library/Managed Preferences}"
+
+# How the extension gets into each profile, chosen at step 1:
+#   policy = a Chrome policy installs it everywhere (own computer; no clicks)
+#   store  = the user clicks "Add to Chrome" in each profile (work or school computer)
+MODE_FILE="$REPO_DIR/generated/install-mode"
+STORE_URL="https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
+STORE_TIMEOUT=300
 
 # Lightning Autofill is the only extension this tool manages
 EXTENSION_ID="nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
@@ -66,6 +75,58 @@ chrome_installed() {
 }
 
 chrome_running() { pgrep -x "Google Chrome" >/dev/null 2>&1; }
+
+# Prints one line for each sign that an organisation (work or school) manages this Mac.
+# Chrome settings that Stagehand installed itself don't count, and nor does Screen Time.
+managed_reasons() {
+  local enrol f extra
+  enrol="$(profiles status -type enrollment 2>/dev/null)"
+  case "$enrol" in *"MDM enrollment: Yes"*) say "it's enrolled in device management (MDM)" ;; esac
+  case "$enrol" in *"Enrolled via DEP: Yes"*) say "it was set up by an organisation (Automated Device Enrollment)" ;; esac
+  [ -e "/Library/Application Support/Google/CloudManagement" ] && say "Chrome is managed by an organisation (Chrome Enterprise)"
+  for f in "$MANAGED_PREFS_DIR/com.google.Chrome.plist" "$MANAGED_PREFS_DIR/$(id -un)/com.google.Chrome.plist"; do
+    [ -f "$f" ] || continue
+    extra="$(plutil -convert json -o - "$f" 2>/dev/null | perl -MJSON::PP -e '
+      my $ext = shift;
+      my $d = eval { local $/; decode_json(<STDIN>) } or do { print "unreadable"; exit };
+      my %ours = map { $_ => 1 } qw(ExtensionInstallForcelist RestoreOnStartup RestoreOnStartupURLs PayloadUUID _manualProfile);
+      my @extra = grep { !$ours{$_} } sort keys %$d;
+      push @extra, "ExtensionInstallForcelist"
+        if grep { index($_, "$ext;") != 0 } @{ $d->{ExtensionInstallForcelist} || [] };
+      push @extra, "settings from device management" unless $d->{_manualProfile};
+      print join(", ", @extra);' "$EXTENSION_ID" 2>/dev/null)"
+    [ -n "$extra" ] && say "Chrome already has settings from an organisation ($extra)"
+  done
+}
+
+policy_installed() {
+  local id list
+  list="$(profiles list 2>/dev/null)"
+  for id in $POLICY_ID $OLD_POLICY_IDS; do
+    grep -q "$id" <<< "$list" && return 0
+  done
+  return 1
+}
+
+# Prints policy, store, or nothing if step 1 hasn't been done yet
+install_mode() {
+  if [ -f "$MODE_FILE" ]; then
+    cat "$MODE_FILE"
+  elif policy_installed; then
+    printf 'policy'    # set up by an earlier version, before the mode was saved
+  fi
+}
+
+set_install_mode() {
+  mkdir -p "$(dirname "$MODE_FILE")"
+  printf '%s' "$1" > "$MODE_FILE"
+}
+
+need_step_1() {
+  [ -n "$(install_mode)" ] && return 1
+  say "Please choose step 1 first."
+  return 0
+}
 
 quit_chrome() {
   chrome_running || return 0
@@ -194,25 +255,37 @@ EOF
 
 remove_policy() {
   say "Removing the settings profile (you'll be asked for your Mac password)..."
+  local id
+  for id in $OLD_POLICY_IDS; do
+    if profiles list 2>/dev/null | grep -q "$id"; then
+      sudo profiles remove -identifier "$id" 2>/dev/null && say "Removed the settings profile from an earlier version ($id)."
+    fi
+  done
   if sudo profiles remove -identifier "$POLICY_ID" 2>/dev/null; then
     say "Removed. Restart Chrome; chrome://policy should no longer list these settings."
   else
     say "I couldn't remove it automatically. To remove it by hand:"
     say "  System Settings > search 'Profiles' > select 'Stagehand Policy' > click the minus (-) button."
-    say "  (If you installed it before the tool was renamed, it's called 'Chrome Profile Tiler Policy'.)"
+    say "  (Earlier versions called it 'Chrome Profile Tiler Policy' or 'Chrome Policy'.)"
   fi
 }
 
 # ---------------------------------------------------------------- profiles
 
-# Opens one profile just long enough for the policy to install the extension in it.
+# Opens one profile just long enough for the extension to be installed in it: by the
+# policy, or by the user clicking "Add to Chrome" on the Web Store page.
 # Returns 0 if the extension is there afterwards, 1 if it never appeared.
 install_extension_in() {
-  local p="$1" ext_dir waited=0
+  local p="$1" ext_dir waited=0 url="about:blank" timeout="$INSTALL_TIMEOUT"
   ext_dir="$CHROME_DIR/$p/Extensions/$EXTENSION_ID"
   if [ ! -d "$ext_dir" ]; then
-    open -na "Google Chrome" --args --profile-directory="$p" about:blank
-    while [ ! -d "$ext_dir" ] && [ "$waited" -lt "$INSTALL_TIMEOUT" ]; do
+    if [ "$(install_mode)" = "store" ]; then
+      url="$STORE_URL"
+      timeout="$STORE_TIMEOUT"
+      say "    In the Chrome window that opens, click 'Add to Chrome', then 'Add extension'."
+    fi
+    open -na "Google Chrome" --args --profile-directory="$p" "$url"
+    while [ ! -d "$ext_dir" ] && [ "$waited" -lt "$timeout" ]; do
       sleep 2
       waited=$((waited + 2))
     done
@@ -223,21 +296,28 @@ install_extension_in() {
 }
 
 open_master() {
+  need_step_1 && return 1
+  local args
+  args=(--profile-directory="$MASTER_PROFILE" --new-window)
   say "Opening the master profile."
   say "This is a separate Chrome profile just for setting up $EXTENSION_NAME by hand."
-  say "The first time, it can take up to a minute for the extension to appear."
   say ""
   say "When Chrome opens:"
   say "  - If it asks you to sign in or turn on sync, choose 'Don't sign in'."
+  if [ "$(install_mode)" = "store" ]; then
+    say "  - Click 'Add to Chrome', then 'Add extension', to install $EXTENSION_NAME."
+    args+=("$STORE_URL")
+  else
+    say "  - Wait for $EXTENSION_NAME to install itself (up to a minute the first time)."
+  fi
   say "  - Follow your Autofill instructions to set up $EXTENSION_NAME."
   say "  - When you've finished and clicked Save, close Chrome completely (Cmd+Q)."
   say "Then come back here and choose step 3."
-  open -na "Google Chrome" --args --profile-directory="$MASTER_PROFILE" --new-window
+  open -na "Google Chrome" --args "${args[@]}"
 }
 
-# Prints the profiles that should receive settings, one per line
-
 copy_master() {
+  need_step_1 && return 1
   local src="$CHROME_DIR/$MASTER_PROFILE"
   local src_local="$src/Local Extension Settings/$EXTENSION_ID"
   if [ ! -d "$src_local" ]; then
@@ -270,11 +350,16 @@ copy_master() {
     if install_extension_in "$p"; then
       say "    done"
     else
-      say "    WARNING: the extension didn't appear within ${INSTALL_TIMEOUT}s."
+      say "    WARNING: the extension didn't appear."
       if [ "$tried" -eq 1 ]; then
         say ""
-        say "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
-        say "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        if [ "$(install_mode)" = "store" ]; then
+          say "Did you click 'Add to Chrome' and then 'Add extension'? If the Web Store said the"
+          say "extension is blocked, your organisation doesn't allow it on this computer."
+        else
+          say "That usually means the one-time setup (step 1) isn't finished, so Chrome isn't"
+          say "installing the extension. Open chrome://policy in Chrome to check, then run step 1 again."
+        fi
         return 1
       fi
     fi
@@ -315,7 +400,12 @@ copy_master() {
 show_status() {
   say "Chrome data folder: $CHROME_DIR"
   say "Extension: $EXTENSION_NAME ($EXTENSION_ID)"
-  if profiles list 2>/dev/null | grep -q "$POLICY_ID"; then
+  case "$(install_mode)" in
+    store)  say "Install mode: Add to Chrome in each profile (no policy)" ;;
+    policy) say "Install mode: Chrome policy installs it everywhere" ;;
+    *)      say "Install mode: not chosen yet (step 1)" ;;
+  esac
+  if policy_installed; then
     say "Policy settings profile: installed"
   else
     say "Policy settings profile: not detected here (confirm at chrome://policy in Chrome)"
@@ -344,25 +434,64 @@ show_status() {
   say "fresh one. After step 3, every copy should be close to the master's size."
 }
 
+use_store_mode() {
+  set_install_mode store
+  say "OK: nothing on this computer will be changed. Instead, when each profile is created,"
+  say "Chrome opens on $EXTENSION_NAME's Web Store page and you click 'Add to Chrome',"
+  say "then 'Add extension'. That's two clicks per profile, once."
+  say ""
+  say "On a work or school computer, check first that your organisation allows this:"
+  say "its security software may notice Stagehand creating Chrome profiles and moving windows."
+}
+
 one_time_setup() {
-  ensure_chrome_closed || return 1
-  install_policy
+  local why
+  why="$(managed_reasons)"
+  if [ -n "$why" ]; then
+    say "This looks like a work or school computer:"
+    printf '%s\n' "$why" | sed 's/^/  - /'
+    say ""
+    say "So I won't change Chrome's settings for the whole computer."
+    use_store_mode
+  else
+    say "On your own computer, Stagehand can let Chrome install $EXTENSION_NAME in every"
+    say "profile by itself. It does that with a Chrome setting for the whole computer, so"
+    say "it's not for a computer from work or school."
+    say ""
+    if ask_yes_no "Is this your own personal computer?"; then
+      ensure_chrome_closed || return 1
+      install_policy
+      set_install_mode policy
+    else
+      say ""
+      use_store_mode
+    fi
+  fi
   say ""
   say "One-time setup finished. Next, choose step 2 to open the master profile."
 }
 
 # ---------------------------------------------------------------- uninstall
 
-confirm_policy_removal() {
-  say "Heads up: removing the policy also removes $EXTENSION_NAME."
-  say "Chrome treats the extension as managed by the policy, so it will uninstall it from"
-  say "EVERY profile the next time Chrome starts, along with the extension's saved settings."
-  say "The startup page set by the policy goes away too."
+remove_stagehand() {
+  say "This removes what Stagehand set up: it deletes the profiles it made and, if you"
+  say "want, takes $EXTENSION_NAME back off this computer."
   say ""
-  say "Only continue if you're finished with the extension, or you plan to install it"
-  say "yourself from the Chrome Web Store afterwards (it will start empty)."
-  say ""
-  ask_yes_no "Remove the policy anyway?"
+  delete_profiles || return 1
+  if policy_installed; then
+    say ""
+    say "Chrome is still set to install $EXTENSION_NAME in every profile on this computer"
+    say "(that's why it says 'Managed by your organization')."
+    say "Taking that off also removes $EXTENSION_NAME, and its saved settings, from every"
+    say "profile that's left, including the master profile if you kept it."
+    if ask_yes_no "Take it off now?"; then
+      remove_policy
+    else
+      say "Left in place. Choose this option again whenever you're ready."
+      return 0
+    fi
+  fi
+  rm -f "$MODE_FILE"
 }
 
 # Removes the given profile folders from Chrome's profile list (the "Local State" file).
@@ -465,7 +594,6 @@ delete_profiles() {
   say "Deleted $moved profile(s). Empty the Trash to free the space."
   say "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   say "that card and choose Delete."
-  say "If you're removing everything, choose option 7 next to remove the policy."
 }
 
 # ---------------------------------------------------------------- tiling
@@ -634,10 +762,7 @@ EOF
 check_progress() {
   local m="$CHROME_DIR/$MASTER_PROFILE" d p
   DONE_1=0; DONE_2=0; DONE_3=1
-  # the extension only installs itself once the policy is in place
-  if [ -d "$m/Extensions/$EXTENSION_ID" ] || [ -d "$CHROME_DIR/${PROFILES[0]}/Extensions/$EXTENSION_ID" ]; then
-    DONE_1=1
-  fi
+  [ -n "$(install_mode)" ] && DONE_1=1
   d="$m/Local Extension Settings/$EXTENSION_ID"
   [ -d "$d" ] && [ "$(dir_kb "$d")" -ge 8 ] && DONE_2=1
   for p in "${PROFILES[@]}"; do
@@ -665,7 +790,7 @@ show_menu() {
   NEXT_SHOWN=""
   say ""
   say "  Get set up (once)"
-  setup_line 1 "$DONE_1" "Let Chrome install $EXTENSION_NAME for you"
+  setup_line 1 "$DONE_1" "Choose how to install $EXTENSION_NAME"
   setup_line 2 "$DONE_2" "Set up $EXTENSION_NAME in the master profile"
   setup_line 3 "$DONE_3" "Copy the master into Profile 1 - Profile $PROFILE_COUNT"
   say ""
@@ -675,8 +800,7 @@ show_menu() {
   say ""
   say "  More"
   say "      6) Check status"
-  say "      7) Remove the policy (also removes the extension)"
-  say "      8) Delete the profiles"
+  say "      7) Finished with the sale? Remove Stagehand"
   say "      Q) Quit"
   say ""
   if [ -z "$NEXT_SHOWN" ]; then
@@ -706,10 +830,9 @@ main() {
       4) launch_tiled ;;
       5) launch_tiled fast ;;
       6) show_status ;;
-      7) if confirm_policy_removal; then remove_policy; else say "Cancelled."; fi ;;
-      8) delete_profiles ;;
+      7) remove_stagehand ;;
       q|Q) exit 0 ;;
-      *) say "Please choose 1-8 or Q." ;;
+      *) say "Please choose 1-7 or Q." ;;
     esac
     say ""
     pause

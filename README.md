@@ -10,6 +10,8 @@ Works on **Windows** and **macOS**. You only need Google Chrome.
 
 > Not affiliated with Google, or with the makers of Lightning Autofill.
 
+> **Using a work or school computer?** Check that your organisation allows this first: its security software may notice Stagehand creating Chrome profiles and moving windows. Stagehand spots most managed computers and, on those, never changes Chrome's settings for the whole computer (see [Step 1](#step-1-choose-how-to-install-lightning-autofill-menu-option-1)).
+
 ---
 
 ## The big idea
@@ -106,7 +108,7 @@ Both versions show the same menu. Type a number and press **Enter**.
 
 ```
   Get set up (once)
-  [x] 1) Let Chrome install Lightning Autofill for you
+  [x] 1) Choose how to install Lightning Autofill
   [ ] 2) Set up Lightning Autofill in the master profile   <- next
   [ ] 3) Copy the master into Profile 1 - Profile 12
 
@@ -116,8 +118,7 @@ Both versions show the same menu. Type a number and press **Enter**.
 
   More
       6) Check status
-      7) Remove the policy (also removes the extension)
-      8) Delete the profiles
+      7) Finished with the sale? Remove Stagehand
       Q) Quit
 ```
 
@@ -127,21 +128,25 @@ The first time, go through steps 1, 2, 3 in order. The menu ticks off each step 
 
 ## Walkthrough
 
-### Step 1: One-time setup (menu option 1)
+### Step 1: Choose how to install Lightning Autofill (menu option 1)
 
-This lets Chrome install Lightning Autofill automatically in every profile, so you never have to visit the Web Store.
+The tool asks: **is this your own personal computer?**
 
-- **Windows:** you'll see a permission prompt (UAC). Click **Yes**.
-- **Mac:** the tool creates a small settings profile and opens it. Open **System Settings**, search for **Profiles** (on some versions it's under **Privacy & Security > Profiles**, on others **General > Device Management**), double-click **Stagehand Policy**, click **Install**, and enter your Mac password. Then go back to Terminal and press **Enter**.
+- **Yes:** Stagehand adds a Chrome setting (a "policy") so that Chrome installs Lightning Autofill in every profile by itself. No clicking in each profile.
+  - **Windows:** you'll see a permission prompt (UAC). Click **Yes**.
+  - **Mac:** the tool creates a small settings profile and opens it. Open **System Settings**, search for **Profiles** (on some versions it's under **Privacy & Security > Profiles**, on others **General > Device Management**), double-click **Stagehand Policy**, click **Install**, and enter your Mac password. Then go back to Terminal and press **Enter**.
+- **No (a work or school computer):** nothing on the computer is changed. Instead, whenever the tool creates a profile, Chrome opens on Lightning Autofill's Web Store page and you click **Add to Chrome**, then **Add extension**. That's two clicks per profile, once.
 
-You only ever do this once. (To undo it, see [Undoing everything](#undoing-everything).)
+If the computer looks managed by an organisation (enrolled in device management, joined to a company network, or with Chrome settings from an organisation), the tool doesn't ask: it always uses the second way.
+
+You only do this once. (To undo it, see [Undoing everything](#undoing-everything).)
 
 ### Step 2: Set up the master profile (menu option 2)
 
 Chrome opens a brand-new profile. This is your **master profile**. Have your Autofill instructions open (you'll already have them from whoever organised the sale) and set up Lightning Autofill in this profile exactly as they say. Here's the same thing in short, with the differences for this tool pointed out.
 
 1. **If Chrome asks you to sign in or turn on sync, choose "Don't sign in".** Signing in can make Chrome overwrite Lightning Autofill's settings with a cloud copy.
-2. **Lightning Autofill installs itself.** It can take up to a minute to appear as a lightning icon at the top right. *Skip the "Install from the Chrome Web Store" step in the instructions: it's already done.* If the icon is hidden, click the jigsaw-piece icon and pin it.
+2. **Install Lightning Autofill.** On your own computer it installs itself: it can take up to a minute to appear as a lightning icon at the top right, so *skip the "Install from the Chrome Web Store" step in the instructions*. On a work or school computer, Chrome opens on its Web Store page: click **Add to Chrome**, then **Add extension**. If the icon is hidden, click the jigsaw-piece icon and pin it.
 3. **Open the extension's Options:** right-click the lightning icon and choose **Options**.
 4. **Get a subscription, once.** The free version only allows 10 autofills a day per profile; the instructions recommend the Plus plan. Follow the instructions to subscribe. You'll be emailed an **Invoice Number**. You only need **one** subscription: the same key works in every profile. If you already have one, skip this.
 5. **Activate your key.** In Options, go to the **Settings** tab. Under **Subscription**, paste **only the part of the Invoice Number before the hyphen** (for `9D3C9801-0001`, paste `9D3C9801`) and click **Activate**. You should see **✓ Activated** and **Plan: Plus**.
@@ -158,7 +163,7 @@ Chrome opens a brand-new profile. This is your **master profile**. Have your Aut
 Choose option 3. The tool:
 
 1. checks the master has Lightning Autofill set up (and warns you if it looks empty, which usually means Save wasn't clicked);
-2. creates Profile 1 ... Profile 12 if they don't exist yet, and lets Chrome install the extension in each;
+2. creates Profile 1 ... Profile 12 if they don't exist yet, and gets the extension installed in each (on a work or school computer, it opens each one on the Web Store page for you to click **Add to Chrome**, then **Add extension**);
 3. copies the master's Lightning Autofill data into every one: your activation key, the rules, and the options;
 4. backs up whatever was in the copies first.
 
@@ -217,7 +222,7 @@ First, run **6) Check status**. After step 3, every copy should show roughly the
 - **A copy isn't activated.** Open Lightning Autofill's Options in that profile, go to **Settings**, paste the first part of your Invoice Number and click **Activate**. One subscription key works in every profile.
 - **A copy is missing the rules.** In that profile's Options, go to **Sync**, set Import mode to **Replace**, paste the rules URL under **Remote Import**, click **Import**, then click **Save** on the Form Fields tab.
 - **Several copies are wrong.** Check that you clicked **Save** in the master and closed Chrome completely before step 3, then run step 3 again. Also check that none of the copies is signed in to a Google account with Chrome sync on, because Chrome can overwrite the copied data from the cloud.
-- **The extension didn't install in the copies.** Open `chrome://policy` in Chrome and look for Lightning Autofill. If it's missing, the one-time setup (step 1) wasn't completed. On a Mac that means the settings profile hasn't been approved yet.
+- **The extension didn't install in the copies.** On your own computer: open `chrome://policy` in Chrome and look for Lightning Autofill. If it's missing, step 1 wasn't completed; on a Mac that means the settings profile hasn't been approved yet. On a work or school computer: make sure you clicked **Add to Chrome** and then **Add extension** in each window. If the Web Store says the extension is blocked, your organisation doesn't allow it.
 - **Still stuck.** Repeat the instructions by hand in that profile. The tool never stops you doing that.
 
 ---
@@ -238,7 +243,7 @@ These warnings appear because the files came from the internet and aren't signed
 Being upfront, because some of this is unusual:
 
 - **The Mac installer downloads this project from GitHub** into `~/stagehand`. That's the only network request the scripts make themselves; Chrome itself downloads the extension.
-- **It sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs Lightning Autofill and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just the ones this tool makes. Chrome will show "Managed by your organization", and the extension can't be removed by hand while the policy is in place. Removing the policy later removes the extension too (see [Undoing everything](#undoing-everything)).
+- **On your own computer, it sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs Lightning Autofill and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just the ones this tool makes. Chrome will show "Managed by your organization", and the extension can't be removed by hand while the policy is in place. Removing the policy later removes the extension too (see [Undoing everything](#undoing-everything)). On a work or school computer it never does this.
 - **It copies the extension's saved data** between profile folders inside Chrome's data directory. This isn't an official Chrome feature, so it can fail in some situations (see above). What was there before is backed up to a `generated/` folder inside this project.
 - **It closes Chrome** (after asking) for the steps that need it. Save your work first.
 - **Your normal Chrome profile (`Default`) is never touched** by any step.
@@ -255,21 +260,23 @@ Being upfront, because some of this is unusual:
 
 ## Undoing everything
 
-There are two separate clean-ups, and they do different things.
+Choose **7) Finished with the sale? Remove Stagehand**. It does two things, asking before each:
 
-**Option 7: remove the policy.** This removes the "Managed by your organization" label and gives you back control of the startup page. **It also removes Lightning Autofill from every profile**, together with its saved settings, the next time Chrome starts. That's how Chrome treats an extension that was installed by a policy: when the policy goes, the extension goes. So don't use this just to tidy up while you still want the extension. The menu warns you and asks before doing it.
-
-**Option 8: delete the profiles.** This deletes Profile 1 to Profile N and removes them from Chrome's profile list. It will:
+**1. Deletes the profiles it made.** Profile 1 to Profile N go, and they're removed from Chrome's profile list. It will:
 
 - show you exactly which profiles it's about to delete, and ask you to **type `DELETE`** to continue;
-- ask separately about the master profile (the default answer is to keep it, so you can copy it again later);
+- ask separately about the master profile (the default answer is to keep it, so you can copy it again next time);
 - **never touch your `Default` profile**;
 - move the folders to the **Trash / Recycle Bin** instead of erasing them, so you can get them back until you empty it (Windows may delete a very large profile permanently if it doesn't fit in the Recycle Bin);
 - keep a backup of Chrome's `Local State` file in `generated/`, and put it back if the clean-up fails.
 
 Deleting a profile removes everything in it: history, bookmarks, saved passwords, cookies and any accounts signed in there. If Chrome still lists a deleted profile in its profile picker afterwards, click the three dots on that card and choose **Delete**.
 
-**To remove everything,** run option 8 first and then option 7. On a Mac you can then also delete the `~/stagehand` folder.
+**2. Takes Lightning Autofill back off this computer** (only if step 1 set the Chrome policy). This removes the "Managed by your organization" label and gives you back control of the startup page. It also removes Lightning Autofill, and its saved settings, from **every profile that's left**, including the master if you kept it: that's how Chrome treats an extension a policy installed. You can say no and come back to it later.
+
+On a work or school computer there's no policy, so only the first part applies. Remove Lightning Autofill from any other profile the normal way (right-click the lightning icon > **Remove from Chrome**).
+
+On a Mac you can then also delete the `~/stagehand` folder.
 
 ---
 
@@ -278,8 +285,10 @@ Deleting a profile removes everything in it: history, bookmarks, saved passwords
 | Step | Windows | macOS |
 |---|---|---|
 | Install the tool | Download the ZIP | `install.sh` downloads the ZIP with `curl` into `~/stagehand` |
-| Install the extension everywhere | Registry keys under `HKLM\SOFTWARE\Policies\Google\Chrome` | A `.mobileconfig` settings profile for `com.google.Chrome` |
-| Create profiles | `chrome --profile-directory="Profile N"` creates the profile, and the policy installs the extension | The same, through `open -na "Google Chrome"` |
+| Install the extension (own computer) | Registry keys under `HKLM\SOFTWARE\Policies\Google\Chrome` | A `.mobileconfig` settings profile for `com.google.Chrome` |
+| Install the extension (work or school computer) | Opens each new profile on the Web Store page and waits for **Add to Chrome** | Same |
+| Spot a managed computer | Domain or Entra ID join, MDM enrolment, Chrome Enterprise, or Chrome policies Stagehand didn't set | MDM or Automated Device Enrollment, Chrome Enterprise, or Chrome settings Stagehand didn't set |
+| Create profiles | `chrome --profile-directory="Profile N"` creates the profile | The same, through `open -na "Google Chrome"` |
 | Copy the master | Copies `Local Extension Settings\<id>` and `Sync Extension Settings\<id>` from the master's folder into each profile | Same |
 | Tile windows | Win32 `SetWindowPos` on each new Chrome window | AppleScript `set bounds` on each new Chrome window |
 | Multiple screens | Windows are split evenly across screens; each screen gets its own grid | Same |
@@ -295,7 +304,7 @@ Start (Mac).command     double-click launcher for macOS (the installer is more r
 config.txt              the only file most people need to edit
 scripts/windows.ps1     Windows implementation (PowerShell 5.1+)
 scripts/macos.sh        macOS implementation (bash 3.2+, the version macOS ships)
-generated/              created at run time: backups and the Mac settings profile (git-ignored)
+generated/              created at run time: backups, the install mode from step 1, and the Mac settings profile (git-ignored)
 ```
 
 ## Contributing
@@ -304,4 +313,4 @@ Issues and pull requests welcome. Keep the scripts ASCII-only (Windows PowerShel
 
 ## Licence
 
-MIT. See `LICENSE`. Put your own name in the copyright line.
+MIT. See `LICENSE`.
