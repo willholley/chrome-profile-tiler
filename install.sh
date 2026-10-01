@@ -63,7 +63,7 @@ main() {
   command -v unzip >/dev/null 2>&1 || fail "unzip is missing."
 
   # A folder that exists but isn't ours: don't touch it
-  if [ -d "$DEST" ] && [ ! -f "$DEST/scripts/macos.sh" ]; then
+  if [ -e "$DEST" ] && { [ ! -d "$DEST" ] || [ ! -f "$DEST/scripts/macos.sh" ]; }; then
     fail "$DEST already exists and doesn't look like Chrome Profile Tiler. Move it, or set CPT_DIR to another folder."
   fi
 
