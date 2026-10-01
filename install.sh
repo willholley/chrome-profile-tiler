@@ -8,7 +8,7 @@
 # What it does:
 #   1. Downloads the latest release of this project into ~/stagehand
 #   2. If you run it again later, updates the files but keeps your config.txt
-#   3. Offers to open config.txt for editing, then offers to start the menu
+#   3. Offers to start the menu, which asks for your settings the first time
 #
 # The menu also runs this file itself (with STAGEHAND_UPDATE=1) when it finds a newer
 # release, so keep that path working.
@@ -116,14 +116,6 @@ main() {
 
   if have_tty; then
     echo
-    if [ "$FRESH" -eq 1 ]; then
-      echo "Before you start, check the settings (which page to open, how many profiles)."
-      if ask "Open config.txt in TextEdit now?" Y; then
-        open -e "$DEST/config.txt"
-        read -r -p "Make your changes, press Cmd+S to save, close the window, then press Enter here... " _ </dev/tty
-      fi
-    fi
-    echo
     if ask "Start the Stagehand menu now?" Y; then
       bash "$DEST/scripts/macos.sh" </dev/tty
       return 0
@@ -135,7 +127,7 @@ main() {
   echo
   echo "  bash $SHOWN/scripts/macos.sh"
   echo
-  echo "To edit your settings:  open -e $SHOWN/config.txt"
+  echo "To change your settings, choose 8 in the menu."
   echo "The menu offers to update itself when there's a new version."
 }
 

@@ -16,6 +16,7 @@ $Pad        = 7   # compensates for the invisible borders Windows adds around wi
 $ModeFile   = Join-Path $RepoDir "generated\install-mode"
 $StoreUrl   = "https://chromewebstore.google.com/detail/lightning-autofill/nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
 $StoreTimeout = 300
+$CopyStamp  = Join-Path $RepoDir "generated\last-copy"   # written after each copy, to spot later changes to the master
 # Every merge to main is published as a release with these files attached (see .github/workflows)
 $ReleasesUrl = "https://github.com/willholley/stagehand/releases/latest/download"
 if ($env:RELEASES_URL) { $ReleasesUrl = $env:RELEASES_URL }
@@ -85,6 +86,7 @@ function Read-Settings {
     MAX_SCREENS      = "0"
   }
 
+  $script:Cfg = $cfg   # the values as read, so Edit-Settings can offer them even if they're wrong
   if (-not (Test-Path $ConfigFile)) {
     Write-Host "Could not find config.txt at: $ConfigFile" -ForegroundColor Red
     return $false
@@ -127,6 +129,75 @@ function Read-Settings {
   $script:InstallTimeout = [int]$cfg["INSTALL_TIMEOUT"]
   $script:MaxScreens     = [int]$cfg["MAX_SCREENS"]
   $script:Profiles       = @(1..$script:ProfileCount | ForEach-Object { "Profile $_" })
+  return $true
+}
+
+# Sets KEY=VALUE in config.txt, keeping its comments. Replaces the KEY= line if there is one,
+# otherwise switches on a commented-out #KEY= line, otherwise adds the setting at the end.
+function Set-ConfigValue($key, $value) {
+  $lines = @()
+  if (Test-Path $ConfigFile) { $lines = @(Get-Content $ConfigFile) }
+  $active  = "^\s*$key\s*="
+  $pattern = $active
+  if (@($lines | Where-Object { $_ -match $active }).Count -eq 0) { $pattern = "^#\s*$key\s*=" }
+  $out = New-Object System.Collections.Generic.List[string]
+  $found = $false
+  foreach ($l in $lines) {
+    if (($l -match $pattern) -and ($pattern -eq $active -or -not $found)) {
+      $out.Add("$key=$value")
+      $found = $true
+    } else {
+      $out.Add($l)
+    }
+  }
+  if (-not $found) { $out.Add("$key=$value") }
+  [System.IO.File]::WriteAllLines($ConfigFile, $out, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Asks a question, showing the current value; Enter keeps it
+function Read-Value($question, $current) {
+  $a = (Read-Host "$question [$current]").Trim()
+  if ($a -eq "") { return $current }
+  return $a
+}
+
+# Asks for each setting, showing the current value, and saves them to config.txt
+function Edit-Settings {
+  $oldUrl = $Cfg["STARTUP_URL"]
+  Write-Host "Press Enter to keep the value in [brackets], or type a new one."
+  Write-Host ""
+  while ($true) {
+    $url = Read-Value "Page to open in every profile" $Cfg["STARTUP_URL"]
+    if ($url -match '^https?://\S+$') { break }
+    Write-Host "  Please enter a web address starting with https://"
+  }
+  while ($true) {
+    $count = Read-Value "How many profiles" $Cfg["PROFILE_COUNT"]
+    if ($count -match '^\d+$' -and [int]$count -ge 1) { break }
+    Write-Host "  Please enter a whole number, 1 or more."
+  }
+  while ($true) {
+    $dMin = Read-Value "Shortest pause between opening profiles, in seconds" $Cfg["DELAY_MIN"]
+    $dMax = Read-Value "Longest pause between opening profiles, in seconds" $Cfg["DELAY_MAX"]
+    if ($dMin -match '^\d+$' -and $dMax -match '^\d+$' -and [int]$dMin -le [int]$dMax) { break }
+    Write-Host "  Please enter whole numbers, with the shortest no longer than the longest."
+  }
+
+  try {
+    Set-ConfigValue "STARTUP_URL" $url
+    Set-ConfigValue "PROFILE_COUNT" $count
+    Set-ConfigValue "DELAY_MIN" $dMin
+    Set-ConfigValue "DELAY_MAX" $dMax
+  } catch {
+    Write-Host "Couldn't save the settings to ${ConfigFile}: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
+  if (-not (Read-Settings)) { return $false }
+  Write-Host ""
+  Write-Host "Saved."
+  if ($url -ne $oldUrl -and (Get-InstallMode) -eq "policy" -and $SetStartup) {
+    Write-Host "Chrome's own startup page was set at step 1. Choose step 1 again to change it too."
+  }
   return $true
 }
 
@@ -302,9 +373,35 @@ function Install-ExtensionIn($p) {
   return (Test-Path $extDir)
 }
 
+# True if the master profile has Lightning Autofill set up (anything bigger than a fresh install)
+function Test-MasterSetUp {
+  return ((Get-SettingsKB (Join-Path $UserData "$MasterProfile\Local Extension Settings\$ExtId")) -ge 8)
+}
+
+# True if the master's Lightning Autofill settings changed after the last copy (step 3)
+function Test-MasterChangedSinceCopy {
+  if (-not (Test-Path $CopyStamp)) { return $false }
+  $since = (Get-Item $CopyStamp).LastWriteTime
+  $dir = Join-Path $UserData "$MasterProfile\Local Extension Settings\$ExtId"
+  if (-not (Test-Path $dir)) { return $false }
+  return [bool](Get-ChildItem $dir -Recurse -File | Where-Object { $_.LastWriteTime -gt $since } | Select-Object -First 1)
+}
+
 function Open-MasterProfile {
   if (Test-NeedStep1) { return }
   $chromeArgs = @("--profile-directory=`"$MasterProfile`"", "--new-window")
+  if (Test-MasterSetUp) {
+    Write-Host "Opening the master profile, so you can change the $ExtName set-up."
+    Write-Host ""
+    Write-Host "When Chrome opens:"
+    Write-Host "  - Open $ExtName's Options (right-click the lightning icon > Options)."
+    Write-Host "  - Make your changes. For new rules: Sync tab > Remote Import > Import,"
+    Write-Host "    then click Save on the Form Fields tab."
+    Write-Host "  - Close Chrome completely."
+    Write-Host "Then come back here and choose step 3 to copy the changes into every profile."
+    Start-Process $ChromeExe -ArgumentList $chromeArgs
+    return
+  }
   Write-Host "Opening the master profile."
   Write-Host "This is a separate Chrome profile just for setting up $ExtName by hand."
   Write-Host ""
@@ -402,6 +499,8 @@ function Copy-Master {
   }
 
   Write-Host ""
+  New-Item -ItemType Directory -Path (Split-Path -Parent $CopyStamp) -Force | Out-Null
+  [System.IO.File]::WriteAllText($CopyStamp, (Get-Date -Format o))
   Write-Host "Copied the master profile to $copied of $total profiles."
   if (Test-Path $backup) { Write-Host "What was there before is backed up in: $backup" }
   Write-Host ""
@@ -455,6 +554,11 @@ function Use-StoreMode {
 }
 
 function Start-OneTimeSetup {
+  if ((Get-InstallMode) -eq "") {
+    Write-Host "First, a few settings (you can change them later with option 8)."
+    if (-not (Edit-Settings)) { return }
+    Write-Host ""
+  }
   $why = @(Get-ManagedReasons)
   if ($why.Count -gt 0) {
     Write-Host "This looks like a work or school computer:" -ForegroundColor Yellow
@@ -738,6 +842,7 @@ function Invoke-Action($name) {
     "test-launch"     { Start-TiledLaunch $true }
     "status"          { Show-Status }
     "remove"          { Remove-Stagehand }
+    "settings"        { [void](Edit-Settings) }
     default           { Write-Host "Unknown action: $name" }
   }
 }
@@ -770,13 +875,13 @@ function Get-SettingsKB($dir) {
 
 # Which setup steps look finished: an array of three booleans
 function Get-Progress {
-  $master = Join-Path $UserData $MasterProfile
   $chosen = ((Get-InstallMode) -ne "")
-  $setUp  = ((Get-SettingsKB (Join-Path $master "Local Extension Settings\$ExtId")) -ge 8)
+  $setUp  = (Test-MasterSetUp)
   $copied = $true
   foreach ($p in $Profiles) {
     if ((Get-SettingsKB (Join-Path $UserData "$p\Local Extension Settings\$ExtId")) -lt 8) { $copied = $false; break }
   }
+  if (Test-MasterChangedSinceCopy) { $copied = $false }
   return @($chosen, $setUp, $copied)
 }
 
@@ -790,6 +895,8 @@ function Show-Menu {
       "Set up $ExtName in the master profile",
       "Copy the master into Profile 1 - Profile $ProfileCount"
     )
+    if ($done[1]) { $labels[1] = "Open the master profile to change the Autofill set-up" }
+    if (Test-MasterChangedSinceCopy) { $labels[2] += " (the master has changed)" }
     $nextShown = $false
     Write-Host ""
     Write-Host "  Get set up (once)"
@@ -811,6 +918,7 @@ function Show-Menu {
     Write-Host "  More"
     Write-Host "      6) Check status"
     Write-Host "      7) Finished with the sale? Remove Stagehand"
+    Write-Host "      8) Change settings (page, number of profiles, pauses)"
     Write-Host "      Q) Quit"
     Write-Host ""
     if (-not $nextShown) {
@@ -827,8 +935,9 @@ function Show-Menu {
       "5" { Invoke-Action "test-launch" }
       "6" { Invoke-Action "status" }
       "7" { Invoke-Action "remove" }
+      "8" { Invoke-Action "settings" }
       "Q" { return }
-      default { Write-Host "Please choose 1-7 or Q." }
+      default { Write-Host "Please choose 1-8 or Q." }
     }
     Write-Host ""
     Read-Host "Press Enter to return to the menu" | Out-Null
@@ -911,8 +1020,13 @@ if ($Action -eq "menu" -and (Update-Stagehand)) {
 }
 
 if (-not (Read-Settings)) {
-  Read-Host "Press Enter to close" | Out-Null
-  exit 1
+  Write-Host ""
+  Write-Host "Let's fix the settings."
+  Write-Host ""
+  if (-not (Edit-Settings)) {
+    Read-Host "Press Enter to close" | Out-Null
+    exit 1
+  }
 }
 
 $ChromeExe = Get-ChromeExe

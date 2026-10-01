@@ -43,7 +43,7 @@ You never type anything about "extensions" or "profile names": the tool already 
 curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | bash
 ```
 
-**3. Answer the prompts.** It downloads the tool into a `stagehand` folder in your home folder, offers to open `config.txt` so you can check the settings, then offers to start the menu.
+**3. Answer the prompts.** It downloads the tool into a `stagehand` folder in your home folder, then offers to start the menu. The first time, step 1 asks for your settings (see [Settings](#settings)).
 
 **Next time**, start the menu with:
 
@@ -53,11 +53,7 @@ bash ~/stagehand/scripts/macos.sh
 
 The menu checks for a new version each time it starts and offers to update (see [Updating](#updating)).
 
-To change your settings later:
-
-```
-open -e ~/stagehand/config.txt
-```
+To change your settings later, choose **8) Change settings** in the menu.
 
 Because the files are downloaded by `curl` rather than a browser, macOS doesn't block them.
 
@@ -89,16 +85,13 @@ xattr -dr com.apple.quarantine .
 ```
 bash scripts/macos.sh
 ```
-
-Edit `config.txt` with TextEdit first (right-click > Open With > TextEdit).
 </details>
 
 ### Windows
 
 1. Download [stagehand.zip](https://github.com/willholley/stagehand/releases/latest/download/stagehand.zip) and unzip it somewhere you'll remember (your Desktop is fine). To avoid a security warning, right-click the ZIP first, choose **Properties**, tick **Unblock**, then unzip.
-2. Open **`config.txt`** in Notepad and check the settings (see [Settings](#settings)).
-3. Double-click **`Start (Windows).bat`**.
-4. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
+2. Double-click **`Start (Windows).bat`**.
+3. If Windows says **"Windows protected your PC"**, click **More info**, then **Run anyway**.
 
 ---
 
@@ -119,10 +112,11 @@ Both versions show the same menu. Type a number and press **Enter**.
   More
       6) Check status
       7) Finished with the sale? Remove Stagehand
+      8) Change settings (page, number of profiles, pauses)
       Q) Quit
 ```
 
-The first time, go through steps 1, 2, 3 in order. The menu ticks off each step once it's done and points at the next one. After that you'll mostly use 4.
+The first time, go through steps 1, 2, 3 in order. The menu ticks off each step once it's done and points at the next one. After that you'll mostly use 4. Once the master is set up, option 2 becomes *Open the master profile to change the Autofill set-up*: use it whenever the Autofill instructions change (see [Later: the Autofill settings changed](#later-the-autofill-settings-changed)).
 
 ---
 
@@ -189,10 +183,10 @@ Choose **4) Launch all the profiles**. It opens Profile 1 to Profile 12 one at a
 
 ### Later: the Autofill settings changed
 
-1. Menu option **2** to open the master.
+1. Menu option **2**, which now reads *Open the master profile to change the Autofill set-up*. It opens the master on its own, with a reminder of what to do.
 2. Do the changes there. If the rules changed, that's usually steps 7 to 9 again: **Remote Import > Import**, check, then **Save**. (Keep Import mode on **Replace**.)
 3. Close Chrome completely.
-4. Menu option **3** to copy the master to every profile again.
+4. Menu option **3** to copy the master to every profile again. The menu notices the master has changed and points you at it: step 3 shows *(the master has changed)* until you copy.
 5. Optionally, option **5** to check.
 
 Nothing else needs repeating.
@@ -217,7 +211,18 @@ On a Mac you can also update by running the install line again.
 
 ## Settings
 
-Everything lives in `config.txt`. Open it in Notepad (Windows) or TextEdit (Mac). Write values exactly as shown, with no quotes.
+Choose **8) Change settings** in the menu (step 1 also asks the first time). It asks for each setting in turn, showing the current value in brackets: press **Enter** to keep it, or type a new one.
+
+```
+Page to open in every profile [https://glastonbury.seetickets.com]:
+How many profiles [12]: 8
+Shortest pause between opening profiles, in seconds [45]:
+Longest pause between opening profiles, in seconds [75]:
+```
+
+If something in the settings is wrong when the menu starts, it asks you to fix it the same way.
+
+The answers are saved in `config.txt`, which you can also edit by hand:
 
 | Setting | What it does |
 |---|---|
@@ -318,7 +323,7 @@ Files:
 install.sh              macOS one-line installer (curl | bash)
 Start (Windows).bat     double-click launcher for Windows
 Start (Mac).command     double-click launcher for macOS (the installer is more reliable)
-config.txt              the only file most people need to edit
+config.txt              your settings (menu option 8 changes them for you)
 scripts/windows.ps1     Windows implementation (PowerShell 5.1+)
 scripts/macos.sh        macOS implementation (bash 3.2+, the version macOS ships)
 VERSION                 the installed version; only in release downloads, not in the repository
