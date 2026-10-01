@@ -1,12 +1,12 @@
 #!/bin/bash
-# Chrome Profile Tiler - macOS
+# Stagehand - macOS
 # Written for bash 3.2, the version that ships with macOS.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${CONFIG_FILE:-$REPO_DIR/config.txt}"
 CHROME_DIR="${CHROME_DATA_DIR:-$HOME/Library/Application Support/Google/Chrome}"
-POLICY_ID="com.local.chrome-profile-tiler"
+POLICY_ID="com.local.chrome-profile-tiler"  # kept from the old name so existing installs can still be removed
 
 # Lightning Autofill is the only extension this tool manages
 EXTENSION_ID="nlmmgnhgdeffjkdckmikfpnddkbbfkkk"
@@ -138,7 +138,7 @@ validate_config() {
 
 install_policy() {
   local out_dir="$REPO_DIR/generated"
-  local out="$out_dir/Chrome-Profile-Tiler-Policy.mobileconfig"
+  local out="$out_dir/Stagehand-Policy.mobileconfig"
   mkdir -p "$out_dir"
 
   local startup=""
@@ -157,7 +157,7 @@ install_policy() {
   <key>PayloadVersion</key><integer>1</integer>
   <key>PayloadIdentifier</key><string>$POLICY_ID</string>
   <key>PayloadUUID</key><string>$(uuidgen)</string>
-  <key>PayloadDisplayName</key><string>Chrome Profile Tiler Policy</string>
+  <key>PayloadDisplayName</key><string>Stagehand Policy</string>
   <key>PayloadDescription</key><string>Installs one Chrome extension and sets a startup page in every Chrome profile.</string>
   <key>PayloadContent</key>
   <array>
@@ -183,7 +183,7 @@ EOF
   say "  1. Open System Settings and search for 'Profiles'"
   say "     (on some macOS versions: Privacy & Security > Profiles,"
   say "      on others: General > Device Management)."
-  say "  2. Double-click 'Chrome Profile Tiler Policy' and click Install."
+  say "  2. Double-click 'Stagehand Policy' and click Install."
   say "  3. Enter your Mac password if asked."
   say ""
   open "$out"
@@ -198,7 +198,8 @@ remove_policy() {
     say "Removed. Restart Chrome; chrome://policy should no longer list these settings."
   else
     say "I couldn't remove it automatically. To remove it by hand:"
-    say "  System Settings > search 'Profiles' > select 'Chrome Profile Tiler Policy' > click the minus (-) button."
+    say "  System Settings > search 'Profiles' > select 'Stagehand Policy' > click the minus (-) button."
+    say "  (If you installed it before the tool was renamed, it's called 'Chrome Profile Tiler Policy'.)"
   fi
 }
 
@@ -464,7 +465,7 @@ delete_profiles() {
   say "Deleted $moved profile(s). Empty the Trash to free the space."
   say "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   say "that card and choose Delete."
-  say "If you're removing everything, choose option 6 next to remove the policy."
+  say "If you're removing everything, choose option 7 next to remove the policy."
 }
 
 # ---------------------------------------------------------------- tiling
@@ -548,6 +549,16 @@ place_new_window() {
   return 1
 }
 
+# Waits $1 seconds, counting down on a single line
+countdown() {
+  local s
+  for ((s = $1; s > 0; s--)); do
+    printf '\r    next window in %3ds ' "$s"
+    sleep 1
+  done
+  printf '\r    next window in   0s\n'
+}
+
 launch_tiled() {
   local dmin=$DELAY_MIN dmax=$DELAY_MAX
   if [ "$1" = "fast" ]; then dmin=1; dmax=1; fi
@@ -592,32 +603,86 @@ launch_tiled() {
     fi
     [ "$i" -eq "$total" ] && break
     delay=$((dmin + RANDOM % (dmax - dmin + 1)))
-    say "    waiting ${delay}s..."
-    sleep "$delay"
+    countdown "$delay"
   done
   say "Done."
 }
 
 # ---------------------------------------------------------------- menu
 
+show_banner() {
+  cat <<'EOF'
+
+                         .
+                        /|\
+                       / | \
+                      /  |  \
+                     /   |   \
+                    /____|____\
+                   /  _______  \
+                  /  |       |  \
+                 /___|_______|___\
+      \o/  o   \o/  o/  \o/  \o   o  \o/
+       |  /|\   |   |    |    |  /|\  |
+EOF
+  say "  =============================================="
+  say "         Stagehand  -  $EXTENSION_NAME"
+  say "  =============================================="
+}
+
+# Sets DONE_1, DONE_2, DONE_3 to 1 for each setup step that looks finished
+check_progress() {
+  local m="$CHROME_DIR/$MASTER_PROFILE" d p
+  DONE_1=0; DONE_2=0; DONE_3=1
+  # the extension only installs itself once the policy is in place
+  if [ -d "$m/Extensions/$EXTENSION_ID" ] || [ -d "$CHROME_DIR/${PROFILES[0]}/Extensions/$EXTENSION_ID" ]; then
+    DONE_1=1
+  fi
+  d="$m/Local Extension Settings/$EXTENSION_ID"
+  [ -d "$d" ] && [ "$(dir_kb "$d")" -ge 8 ] && DONE_2=1
+  for p in "${PROFILES[@]}"; do
+    d="$CHROME_DIR/$p/Local Extension Settings/$EXTENSION_ID"
+    if [ ! -d "$d" ] || [ "$(dir_kb "$d")" -lt 8 ]; then DONE_3=0; break; fi
+  done
+}
+
+# $1 = step number, $2 = 1 if done, $3 = label. The first unfinished step is marked as next.
+setup_line() {
+  local box="[ ]" next=""
+  if [ "$2" -eq 1 ]; then
+    box="[x]"
+  elif [ -z "$NEXT_SHOWN" ]; then
+    next="   <- next"
+    NEXT_SHOWN=1
+  fi
+  say "  $box $1) $3$next"
+}
+
 show_menu() {
   clear
-  say "=============================================="
-  say "  Chrome Profile Tiler  -  $EXTENSION_NAME"
-  say "=============================================="
-  say "  Master profile : $MASTER_PROFILE   (you set this one up by hand)"
-  say "  Copies         : Profile 1 - Profile $PROFILE_COUNT   (made from the master)"
+  show_banner
+  check_progress
+  NEXT_SHOWN=""
   say ""
-  say "  1) One-time setup: let Chrome install $EXTENSION_NAME for you"
-  say "  2) Open the master profile and set up $EXTENSION_NAME"
-  say "  3) Copy the master profile to all the others"
-  say "  4) Launch all the profiles"
-  say "  5) Test launch (1-second pause instead of ${DELAY_MIN}-${DELAY_MAX})"
-  say "  6) Check status"
-  say "  7) Remove the policy (also removes the extension)"
-  say "  8) Delete the profiles"
-  say "  Q) Quit"
+  say "  Get set up (once)"
+  setup_line 1 "$DONE_1" "Let Chrome install $EXTENSION_NAME for you"
+  setup_line 2 "$DONE_2" "Set up $EXTENSION_NAME in the master profile"
+  setup_line 3 "$DONE_3" "Copy the master into Profile 1 - Profile $PROFILE_COUNT"
   say ""
+  say "  On the day"
+  say "      4) Launch all the profiles"
+  say "      5) Test launch (1-second pause instead of ${DELAY_MIN}-${DELAY_MAX})"
+  say ""
+  say "  More"
+  say "      6) Check status"
+  say "      7) Remove the policy (also removes the extension)"
+  say "      8) Delete the profiles"
+  say "      Q) Quit"
+  say ""
+  if [ -z "$NEXT_SHOWN" ]; then
+    say "  All set. Choose 5 to check the copies, or 4 when it's time."
+    say ""
+  fi
 }
 
 main() {

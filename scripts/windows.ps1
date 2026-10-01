@@ -1,4 +1,4 @@
-# Chrome Profile Tiler - Windows
+# Stagehand - Windows
 # Keep this file ASCII-only: Windows PowerShell 5.1 misreads non-ASCII
 # characters in scripts that were saved without a byte-order mark.
 
@@ -470,7 +470,7 @@ function Remove-ChromeProfiles {
   Write-Host "Deleted $moved profile(s). Empty the Recycle Bin to free the space."
   Write-Host "If Chrome still shows a deleted profile in its profile picker, click the three dots on"
   Write-Host "that card and choose Delete."
-  Write-Host "If you're removing everything, choose option 6 next to remove the policy."
+  Write-Host "If you're removing everything, choose option 7 next to remove the policy."
 }
 
 # ---------------------------------------------------------------- tiling
@@ -587,8 +587,11 @@ function Start-TiledLaunch([bool]$Fast = $false) {
 
     if ($i -eq $n) { break }
     $delay = Get-Random -Minimum $dMin -Maximum ($dMax + 1)
-    Write-Host "    waiting ${delay}s..."
-    Start-Sleep -Seconds $delay
+    for ($s = $delay; $s -gt 0; $s--) {
+      Write-Host -NoNewline ("`r    next window in {0,3}s " -f $s)
+      Start-Sleep -Seconds 1
+    }
+    Write-Host "`r    next window in   0s"
   }
   Write-Host "Done."
 }
@@ -610,25 +613,82 @@ function Invoke-Action($name) {
   }
 }
 
+function Show-Banner {
+  Write-Host @'
+
+                         .
+                        /|\
+                       / | \
+                      /  |  \
+                     /   |   \
+                    /____|____\
+                   /  _______  \
+                  /  |       |  \
+                 /___|_______|___\
+      \o/  o   \o/  o/  \o/  \o   o  \o/
+       |  /|\   |   |    |    |  /|\  |
+'@
+  Write-Host "  =============================================="
+  Write-Host "         Stagehand  -  $ExtName"
+  Write-Host "  =============================================="
+}
+
+function Get-SettingsKB($dir) {
+  if (-not (Test-Path $dir)) { return -1 }
+  $bytes = (Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum
+  return [math]::Round($bytes / 1KB, 0)
+}
+
+# Which setup steps look finished: an array of three booleans
+function Get-Progress {
+  $master = Join-Path $UserData $MasterProfile
+  $policy = (Test-PolicyInstalled)
+  $setUp  = ((Get-SettingsKB (Join-Path $master "Local Extension Settings\$ExtId")) -ge 8)
+  $copied = $true
+  foreach ($p in $Profiles) {
+    if ((Get-SettingsKB (Join-Path $UserData "$p\Local Extension Settings\$ExtId")) -lt 8) { $copied = $false; break }
+  }
+  return @($policy, $setUp, $copied)
+}
+
 function Show-Menu {
   while ($true) {
     Clear-Host
-    Write-Host "=============================================="
-    Write-Host "  Chrome Profile Tiler  -  $ExtName"
-    Write-Host "=============================================="
-    Write-Host "  Master profile : $MasterProfile   (you set this one up by hand)"
-    Write-Host "  Copies         : Profile 1 - Profile $ProfileCount   (made from the master)"
+    Show-Banner
+    $done   = Get-Progress
+    $labels = @(
+      "Let Chrome install $ExtName for you",
+      "Set up $ExtName in the master profile",
+      "Copy the master into Profile 1 - Profile $ProfileCount"
+    )
+    $nextShown = $false
     Write-Host ""
-    Write-Host "  1) One-time setup: let Chrome install $ExtName for you"
-    Write-Host "  2) Open the master profile and set up $ExtName"
-    Write-Host "  3) Copy the master profile to all the others"
-    Write-Host "  4) Launch all the profiles"
-    Write-Host "  5) Test launch (1-second pause instead of $DelayMin-$DelayMax)"
-    Write-Host "  6) Check status"
-    Write-Host "  7) Remove the policy (also removes the extension)"
-    Write-Host "  8) Delete the profiles"
-    Write-Host "  Q) Quit"
+    Write-Host "  Get set up (once)"
+    for ($s = 0; $s -lt 3; $s++) {
+      if ($done[$s]) {
+        Write-Host "  [x] $($s + 1)) $($labels[$s])"
+      } elseif (-not $nextShown) {
+        Write-Host "  [ ] $($s + 1)) $($labels[$s])   <- next" -ForegroundColor Yellow
+        $nextShown = $true
+      } else {
+        Write-Host "  [ ] $($s + 1)) $($labels[$s])"
+      }
+    }
     Write-Host ""
+    Write-Host "  On the day"
+    Write-Host "      4) Launch all the profiles"
+    Write-Host "      5) Test launch (1-second pause instead of $DelayMin-$DelayMax)"
+    Write-Host ""
+    Write-Host "  More"
+    Write-Host "      6) Check status"
+    Write-Host "      7) Remove the policy (also removes the extension)"
+    Write-Host "      8) Delete the profiles"
+    Write-Host "      Q) Quit"
+    Write-Host ""
+    if (-not $nextShown) {
+      Write-Host "  All set. Choose 5 to check the copies, or 4 when it's time." -ForegroundColor Green
+      Write-Host ""
+    }
     $choice = (Read-Host "Choose an option").Trim().ToUpper()
     Write-Host ""
     switch ($choice) {

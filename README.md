@@ -1,4 +1,6 @@
-# Chrome Profile Tiler
+# Stagehand
+
+*Does the setting up behind the scenes, so all your Chrome windows are in place before the doors open.*
 
 Set up **Lightning Autofill** once, in one Chrome profile. Then use this tool to copy that set-up into as many new Chrome profiles as you like, and to open them all, tiled across your screens, with a random pause between each.
 
@@ -36,15 +38,15 @@ You never type anything about "extensions" or "profile names": the tool already 
 **2. Paste this line and press Enter:**
 
 ```
-curl -fsSL https://raw.githubusercontent.com/willholley/chrome-profile-tiler/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | bash
 ```
 
-**3. Answer the prompts.** It downloads the tool into a `chrome-profile-tiler` folder in your home folder, offers to open `config.txt` so you can check the settings, then offers to start the menu.
+**3. Answer the prompts.** It downloads the tool into a `stagehand` folder in your home folder, offers to open `config.txt` so you can check the settings, then offers to start the menu.
 
 **Next time**, start the menu with:
 
 ```
-bash ~/chrome-profile-tiler/scripts/macos.sh
+bash ~/stagehand/scripts/macos.sh
 ```
 
 (Running the install line again updates the tool and keeps your `config.txt`.)
@@ -52,7 +54,7 @@ bash ~/chrome-profile-tiler/scripts/macos.sh
 To change your settings later:
 
 ```
-open -e ~/chrome-profile-tiler/config.txt
+open -e ~/stagehand/config.txt
 ```
 
 Because the files are downloaded by `curl` rather than a browser, macOS doesn't block them.
@@ -60,7 +62,7 @@ Because the files are downloaded by `curl` rather than a browser, macOS doesn't 
 **Want to read the installer before running it?** This shows the script without running it (press **q** to leave):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/willholley/chrome-profile-tiler/main/install.sh | less
+curl -fsSL https://raw.githubusercontent.com/willholley/stagehand/main/install.sh | less
 ```
 
 <details>
@@ -103,18 +105,23 @@ Edit `config.txt` with TextEdit first (right-click > Open With > TextEdit).
 Both versions show the same menu. Type a number and press **Enter**.
 
 ```
-1) One-time setup: let Chrome install Lightning Autofill for you
-2) Open the master profile and set up Lightning Autofill
-3) Copy the master profile to all the others
-4) Launch all the profiles
-5) Test launch (1-second pause instead of 45-75)
-6) Check status
-7) Remove the policy (also removes the extension)
-8) Delete the profiles
-Q) Quit
+  Get set up (once)
+  [x] 1) Let Chrome install Lightning Autofill for you
+  [ ] 2) Set up Lightning Autofill in the master profile   <- next
+  [ ] 3) Copy the master into Profile 1 - Profile 12
+
+  On the day
+      4) Launch all the profiles
+      5) Test launch (1-second pause instead of 45-75)
+
+  More
+      6) Check status
+      7) Remove the policy (also removes the extension)
+      8) Delete the profiles
+      Q) Quit
 ```
 
-The first time, go through steps 1, 2, 3 in order. After that you'll mostly use 4.
+The first time, go through steps 1, 2, 3 in order. The menu ticks off each step once it's done and points at the next one. After that you'll mostly use 4.
 
 ---
 
@@ -125,7 +132,7 @@ The first time, go through steps 1, 2, 3 in order. After that you'll mostly use 
 This lets Chrome install Lightning Autofill automatically in every profile, so you never have to visit the Web Store.
 
 - **Windows:** you'll see a permission prompt (UAC). Click **Yes**.
-- **Mac:** the tool creates a small settings profile and opens it. Open **System Settings**, search for **Profiles** (on some versions it's under **Privacy & Security > Profiles**, on others **General > Device Management**), double-click **Chrome Profile Tiler Policy**, click **Install**, and enter your Mac password. Then go back to Terminal and press **Enter**.
+- **Mac:** the tool creates a small settings profile and opens it. Open **System Settings**, search for **Profiles** (on some versions it's under **Privacy & Security > Profiles**, on others **General > Device Management**), double-click **Stagehand Policy**, click **Install**, and enter your Mac password. Then go back to Terminal and press **Enter**.
 
 You only ever do this once. (To undo it, see [Undoing everything](#undoing-everything).)
 
@@ -230,7 +237,7 @@ These warnings appear because the files came from the internet and aren't signed
 
 Being upfront, because some of this is unusual:
 
-- **The Mac installer downloads this project from GitHub** into `~/chrome-profile-tiler`. That's the only network request the scripts make themselves; Chrome itself downloads the extension.
+- **The Mac installer downloads this project from GitHub** into `~/stagehand`. That's the only network request the scripts make themselves; Chrome itself downloads the extension.
 - **It sets a Chrome policy** (registry on Windows, a settings profile on Mac) that force-installs Lightning Autofill and, optionally, sets the startup page. This applies to **every Chrome profile on that computer**, not just the ones this tool makes. Chrome will show "Managed by your organization", and the extension can't be removed by hand while the policy is in place. Removing the policy later removes the extension too (see [Undoing everything](#undoing-everything)).
 - **It copies the extension's saved data** between profile folders inside Chrome's data directory. This isn't an official Chrome feature, so it can fail in some situations (see above). What was there before is backed up to a `generated/` folder inside this project.
 - **It closes Chrome** (after asking) for the steps that need it. Save your work first.
@@ -262,7 +269,7 @@ There are two separate clean-ups, and they do different things.
 
 Deleting a profile removes everything in it: history, bookmarks, saved passwords, cookies and any accounts signed in there. If Chrome still lists a deleted profile in its profile picker afterwards, click the three dots on that card and choose **Delete**.
 
-**To remove everything,** run option 8 first and then option 7. On a Mac you can then also delete the `~/chrome-profile-tiler` folder.
+**To remove everything,** run option 8 first and then option 7. On a Mac you can then also delete the `~/stagehand` folder.
 
 ---
 
@@ -270,7 +277,7 @@ Deleting a profile removes everything in it: history, bookmarks, saved passwords
 
 | Step | Windows | macOS |
 |---|---|---|
-| Install the tool | Download the ZIP | `install.sh` downloads the ZIP with `curl` into `~/chrome-profile-tiler` |
+| Install the tool | Download the ZIP | `install.sh` downloads the ZIP with `curl` into `~/stagehand` |
 | Install the extension everywhere | Registry keys under `HKLM\SOFTWARE\Policies\Google\Chrome` | A `.mobileconfig` settings profile for `com.google.Chrome` |
 | Create profiles | `chrome --profile-directory="Profile N"` creates the profile, and the policy installs the extension | The same, through `open -na "Google Chrome"` |
 | Copy the master | Copies `Local Extension Settings\<id>` and `Sync Extension Settings\<id>` from the master's folder into each profile | Same |
