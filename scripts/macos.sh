@@ -37,6 +37,7 @@ DELAY_MIN=45
 DELAY_MAX=75
 INSTALL_TIMEOUT=90
 MAX_SCREENS=0
+ONLY_SCREEN=0
 
 PROFILES=()
 SCREENS=()
@@ -176,7 +177,7 @@ load_config() {
     key="$(trim "${line%%=*}")"
     val="$(trim "${line#*=}")"
     case "$key" in
-      STARTUP_URL|SET_STARTUP_PAGE|PROFILE_COUNT|DELAY_MIN|DELAY_MAX|INSTALL_TIMEOUT|MAX_SCREENS)
+      STARTUP_URL|SET_STARTUP_PAGE|PROFILE_COUNT|DELAY_MIN|DELAY_MAX|INSTALL_TIMEOUT|MAX_SCREENS|ONLY_SCREEN)
         printf -v "$key" '%s' "$val" ;;
     esac
   done < "$CONFIG_FILE"
@@ -185,7 +186,7 @@ load_config() {
 
 validate_config() {
   local bad=0 k v
-  for k in PROFILE_COUNT DELAY_MIN DELAY_MAX INSTALL_TIMEOUT MAX_SCREENS; do
+  for k in PROFILE_COUNT DELAY_MIN DELAY_MAX INSTALL_TIMEOUT MAX_SCREENS ONLY_SCREEN; do
     eval "v=\$$k"
     if ! [[ "$v" =~ ^[0-9]+$ ]]; then
       say "config.txt: $k must be a whole number."
@@ -238,7 +239,7 @@ ask_value() {
 
 # Asks for each setting, showing the current value, and saves them to config.txt
 edit_settings() {
-  local url count dmin dmax old_url="$STARTUP_URL"
+  local url count dmin dmax only old_url="$STARTUP_URL"
   say "Press Enter to keep the value in [brackets], or type a new one."
   say ""
   while true; do
@@ -260,7 +261,12 @@ edit_settings() {
     fi
     say "  Please enter whole numbers, with the shortest no longer than the longest."
   done
-  count=$((10#$count))
+  while true; do
+    only="$(ask_value "Screen to tile onto (0 = all screens, 1 = main screen, 2 = second screen ...)" "$ONLY_SCREEN")" || exit 1
+    [[ "$only" =~ ^[0-9]+$ ]] && break
+    say "  Please enter a whole number, 0 or more."
+  done
+  count=$((10#$count)); only=$((10#$only))
 
   # The advanced settings are only asked about if they're wrong, so the menu can always start
   local k v def
@@ -281,7 +287,8 @@ edit_settings() {
   done
 
   if ! { set_config_value STARTUP_URL "$url" && set_config_value PROFILE_COUNT "$count" &&
-         set_config_value DELAY_MIN "$dmin" && set_config_value DELAY_MAX "$dmax"; }; then
+         set_config_value DELAY_MIN "$dmin" && set_config_value DELAY_MAX "$dmax" &&
+         set_config_value ONLY_SCREEN "$only"; }; then
     say "Couldn't save the settings to $CONFIG_FILE."
     return 1
   fi
@@ -742,7 +749,8 @@ delete_profiles() {
 
 # ---------------------------------------------------------------- tiling
 
-# Fills SCREENS with "x y w h" (top-left origin) for every display's usable area
+# Fills SCREENS with "x y w h" (top-left origin) for every display's usable area:
+# the main screen (the one with the menu bar) first, then the others left to right
 detect_screens() {
   SCREENS=()
   local line
@@ -752,6 +760,7 @@ detect_screens() {
     ObjC.import("AppKit");
     var scr = ObjC.unwrap($.NSScreen.screens);
     var H = scr[0].frame.size.height, out = [];
+    scr = [scr[0]].concat(scr.slice(1).sort(function (a, b) { return a.frame.origin.x - b.frame.origin.x; }));
     for (var i = 0; i < scr.length; i++) {
       var v = scr[i].visibleFrame;
       out.push([v.origin.x, H - (v.origin.y + v.size.height), v.size.width, v.size.height]
@@ -770,15 +779,22 @@ detect_screens() {
   fi
 }
 
-# $1 = number of windows. Fills BOUNDS with "left top right bottom", one grid per screen
+# $1 = number of windows. Fills BOUNDS with "left top right bottom", one grid per screen.
+# ONLY_SCREEN picks a single screen; otherwise the first MAX_SCREENS screens are used (0 = all).
 build_bounds() {
-  local total=$1 ns=${#SCREENS[@]}
-  if [ "$MAX_SCREENS" -gt 0 ] && [ "$MAX_SCREENS" -lt "$ns" ]; then ns=$MAX_SCREENS; fi
+  local total=$1 first=0 ns=${#SCREENS[@]}
+  if [ "$ONLY_SCREEN" -gt 0 ] && [ "$ONLY_SCREEN" -le "$ns" ]; then
+    first=$((ONLY_SCREEN - 1)); ns=1
+  else
+    [ "$ONLY_SCREEN" -gt 0 ] && say "ONLY_SCREEN is $ONLY_SCREEN, but there are only $ns screens. Using them all."
+    if [ "$MAX_SCREENS" -gt 0 ] && [ "$MAX_SCREENS" -lt "$ns" ]; then ns=$MAX_SCREENS; fi
+  fi
   BOUNDS=()
   local base=$((total / ns)) rem=$((total % ns))
-  local s cnt SX SY SW SH cols rows cw ch k l t
-  for ((s = 0; s < ns; s++)); do
-    cnt=$((base + (s < rem ? 1 : 0)))
+  local i s cnt SX SY SW SH cols rows cw ch k l t
+  for ((i = 0; i < ns; i++)); do
+    s=$((first + i))
+    cnt=$((base + (i < rem ? 1 : 0)))
     [ "$cnt" -eq 0 ] && continue
     read -r SX SY SW SH <<< "${SCREENS[$s]}"
     cols=$(awk -v n="$cnt" 'BEGIN{c=int(sqrt(n)); if (c*c<n) c++; print c}')

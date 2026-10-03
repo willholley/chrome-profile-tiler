@@ -218,6 +218,7 @@ Page to open in every profile [https://glastonbury.seetickets.com]:
 How many profiles [12]: 8
 Shortest pause between opening profiles, in seconds [45]:
 Longest pause between opening profiles, in seconds [75]:
+Screen to tile onto (0 = all screens, 1 = main screen, 2 = second screen ...) [0]: 2
 ```
 
 If something in the settings is wrong when the menu starts, it asks you to fix it the same way.
@@ -229,6 +230,7 @@ The answers are saved in `config.txt`, which you can also edit by hand:
 | `STARTUP_URL` | The page every profile opens on when you launch them |
 | `PROFILE_COUNT` | How many profiles to make and launch (Profile 1 to Profile N) |
 | `DELAY_MIN` / `DELAY_MAX` | The random pause, in seconds, between launching one profile and the next |
+| `ONLY_SCREEN` | Mac only: tile every window onto one screen (1 = main screen, 2 = second screen ...), or 0 to tile across all of them |
 
 There's nothing to set for the extension or the master profile. The tool always uses Lightning Autofill, and the master is always the profile it creates for you. A few optional advanced settings are at the bottom of `config.txt`, commented out.
 
