@@ -21,3 +21,5 @@ DELAY_MAX=75
 #INSTALL_TIMEOUT=90
 # How many screens to tile across (0 = all)
 #MAX_SCREENS=0
+# Tile onto just one screen: 1 = main screen, 2 = second screen ... (0 = off)
+#ONLY_SCREEN=0

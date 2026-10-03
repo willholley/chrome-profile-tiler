@@ -53,7 +53,7 @@ has_files() { compgen -G "$1" >/dev/null; }
 write_config() {
   cat > "$CONFIG_FILE"
   STARTUP_URL=""; SET_STARTUP_PAGE="yes"; PROFILE_COUNT=12
-  DELAY_MIN=45; DELAY_MAX=75; INSTALL_TIMEOUT=90; MAX_SCREENS=0
+  DELAY_MIN=45; DELAY_MAX=75; INSTALL_TIMEOUT=90; MAX_SCREENS=0; ONLY_SCREEN=0
 }
 
 # ---------------------------------------------------------------- version_newer
@@ -178,7 +178,7 @@ INSTALL_TIMEOUT=soon
 EOF
 load_config
 # A bad address, then a good one; Enter keeps the profile count; a min > max pair, then a good
-# pair; then a value for the broken INSTALL_TIMEOUT
+# pair; a bad screen, then screen 2; then a value for the broken INSTALL_TIMEOUT
 answers='not a url
 https://new.example.com
 
@@ -186,6 +186,8 @@ https://new.example.com
 70
 10
 20
+second
+2
 60
 '
 edit_settings <<< "$answers" >/dev/null 2>&1
@@ -193,7 +195,8 @@ check_eq "edit_settings saves the answers, after asking again for bad ones" "STA
 PROFILE_COUNT=12
 DELAY_MIN=10
 DELAY_MAX=20
-INSTALL_TIMEOUT=60" "$(cat "$CONFIG_FILE")"
+INSTALL_TIMEOUT=60
+ONLY_SCREEN=2" "$(cat "$CONFIG_FILE")"
 check_eq "edit_settings reloads the settings it saved" "10 20" "$DELAY_MIN $DELAY_MAX"
 
 write_config <<'EOF'
@@ -239,6 +242,25 @@ MAX_SCREENS=0
 SCREENS=("0 0 900 900" "900 0 900 900" "1800 0 900 900")
 build_bounds 1 >/dev/null
 check_eq "more screens than windows leaves the extra screens empty" "0 0 900 900" "$(IFS='|'; echo "${BOUNDS[*]}")"
+
+ONLY_SCREEN=2
+build_bounds 2 >/dev/null
+check_eq "ONLY_SCREEN=2 puts every window on the second screen" \
+  "900 0 1350 900|1350 0 1800 900" "$(IFS='|'; echo "${BOUNDS[*]}")"
+
+MAX_SCREENS=1
+build_bounds 1 >/dev/null
+check_eq "ONLY_SCREEN wins over MAX_SCREENS" "900 0 1800 900" "$(IFS='|'; echo "${BOUNDS[*]}")"
+
+MAX_SCREENS=0
+ONLY_SCREEN=4
+out="$(build_bounds 3)"
+check_eq "ONLY_SCREEN past the last screen says so" \
+  "ONLY_SCREEN is 4, but there are only 3 screens. Using them all." "${out%%$'\n'*}"
+build_bounds 3 >/dev/null
+check_eq "and falls back to every screen" "3" "${#BOUNDS[@]}"
+check_eq "starting on the first" "0 0 900 900" "${BOUNDS[0]}"
+ONLY_SCREEN=0
 
 # ---------------------------------------------------------------- tidy_local_state
 
